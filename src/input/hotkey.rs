@@ -395,24 +395,32 @@ mod tests {
 
     #[test]
     fn test_resolve_key_f13() {
-        // F13 uses Unknown with macOS keycode 0x69 = 105
         let result = resolve_key("f13");
         assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), Key::Unknown(105)));
+        #[cfg(target_os = "macos")]
+        assert!(matches!(result.unwrap(), Key::Unknown(105))); // CGKeyCode 0x69
+        #[cfg(target_os = "linux")]
+        assert!(matches!(result.unwrap(), Key::Unknown(191))); // X11 keycode
     }
 
     #[test]
     fn test_resolve_key_numpad_0() {
         let result = resolve_key("numpad_0");
         assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), Key::Unknown(82))); // macOS 0x52
+        #[cfg(target_os = "macos")]
+        assert!(matches!(result.unwrap(), Key::Unknown(82))); // CGKeyCode 0x52
+        #[cfg(target_os = "linux")]
+        assert_eq!(result.unwrap(), Key::Kp0);
     }
 
     #[test]
     fn test_resolve_key_numpad_enter() {
         let result = resolve_key("numpad_enter");
         assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), Key::Unknown(76))); // macOS 0x4C
+        #[cfg(target_os = "macos")]
+        assert!(matches!(result.unwrap(), Key::Unknown(76))); // CGKeyCode 0x4C
+        #[cfg(target_os = "linux")]
+        assert_eq!(result.unwrap(), Key::KpReturn);
     }
 
     #[test]
