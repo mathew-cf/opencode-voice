@@ -27,6 +27,42 @@ Microphone → cpal → PCM → whisper-rs → text → OpenCode HTTP API → pr
 
 ---
 
+## Usage
+
+**Step 1** — Start OpenCode with the HTTP server enabled:
+
+```bash
+opencode --port 4096
+```
+
+**Step 2** — In a separate terminal, start opencode-voice:
+
+```bash
+opencode-voice --port 4096
+```
+
+### Push-to-talk (default)
+
+Hold the toggle key to record, release to transcribe and send:
+
+| Key | Action |
+|-----|--------|
+| `[space]` (hold) | Start recording |
+| `[space]` (release) | Stop recording and transcribe |
+| `q` or `Ctrl+C` | Quit |
+
+### Toggle mode
+
+With `--no-push-to-talk`, press to start recording, press again to stop:
+
+| Key | Action |
+|-----|--------|
+| `[space]` | Start recording |
+| `[space]` | Stop recording and transcribe |
+| `q` or `Ctrl+C` | Quit |
+
+---
+
 ## Prerequisites
 
 ### Rust toolchain (1.70+)
@@ -55,6 +91,25 @@ sudo dnf install cmake
 - **macOS**: Xcode Command Line Tools — `xcode-select --install`
 - **Linux**: `gcc` or `clang` (usually pre-installed)
 
+### Linux system libraries
+
+Audio capture (`cpal`) and global hotkeys (`rdev`) require development headers on Linux:
+
+```bash
+# Debian/Ubuntu
+sudo apt install libasound2-dev libx11-dev libxi-dev libxtst-dev
+
+# Fedora
+sudo dnf install alsa-lib-devel libX11-devel libXi-devel libXtst-devel
+```
+
+| Package (Debian) | Crate | Purpose |
+|-------------------|-------|---------|
+| `libasound2-dev` | cpal (via alsa-sys) | Audio capture |
+| `libx11-dev` | rdev (via x11) | X11 display connection |
+| `libxi-dev` | rdev (via x11 xinput) | Input device events |
+| `libxtst-dev` | rdev (via x11 xtst/xrecord) | Global hotkey / key event capture |
+
 ### OpenCode with HTTP server enabled
 
 OpenCode does **not** expose an HTTP server by default. You must start it with the `--port` flag:
@@ -69,7 +124,7 @@ opencode --port 4096
 
 ```bash
 git clone <repo-url>
-cd opencode-voicemode
+cd opencode-voice
 cargo build --release
 ```
 
@@ -115,42 +170,6 @@ To set up with a specific model:
 ```bash
 opencode-voice setup --model small.en
 ```
-
----
-
-## Usage
-
-**Step 1** — Start OpenCode with the HTTP server enabled:
-
-```bash
-opencode --port 4096
-```
-
-**Step 2** — In a separate terminal, start opencode-voice:
-
-```bash
-opencode-voice --port 4096
-```
-
-### Push-to-talk (default)
-
-Hold the toggle key to record, release to transcribe and send:
-
-| Key | Action |
-|-----|--------|
-| `[space]` (hold) | Start recording |
-| `[space]` (release) | Stop recording and transcribe |
-| `q` or `Ctrl+C` | Quit |
-
-### Toggle mode
-
-With `--no-push-to-talk`, press to start recording, press again to stop:
-
-| Key | Action |
-|-----|--------|
-| `[space]` | Start recording |
-| `[space]` | Stop recording and transcribe |
-| `q` or `Ctrl+C` | Quit |
 
 ---
 
@@ -229,6 +248,15 @@ Without this permission, global hotkeys will not work. Use `--no-global` to disa
 ```bash
 brew install cmake        # macOS
 sudo apt install cmake    # Ubuntu/Debian
+```
+
+### Build fails: "system library `x11` was not found" (Linux)
+
+Install the X11 and input development headers:
+
+```bash
+sudo apt install libx11-dev libxi-dev libxtst-dev   # Debian/Ubuntu
+sudo dnf install libX11-devel libXi-devel libXtst-devel  # Fedora
 ```
 
 ### "Microphone permission denied" (macOS)
