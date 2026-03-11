@@ -3,9 +3,6 @@
 debug/
 **/*.rs.bk
 
-# Cargo lock (remove this line if building a binary/application)
-Cargo.lock
-
 # Environment
 .env
 .env.local
