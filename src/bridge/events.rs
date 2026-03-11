@@ -28,6 +28,17 @@ pub enum SseEvent {
         session_id: String,
         request_id: String,
     },
+    /// Session status changed (busy/idle/retry).
+    ///
+    /// When the session becomes busy it means the AI has resumed work — any
+    /// pending permissions or questions must have been answered (possibly by
+    /// the user interacting directly with the OpenCode TUI).
+    SessionStatus {
+        session_id: String,
+        /// `true` when the session is actively processing ("busy"),
+        /// `false` when idle.
+        busy: bool,
+    },
     Connected,
     Disconnected(Option<String>),
 }
@@ -263,8 +274,45 @@ pub fn parse_sse_block(block: &str) -> Option<SseEvent> {
                 request_id,
             })
         }
-        _ => None,
+        // Events we intentionally ignore (high-frequency or informational).
+        "session.updated" | "session.created" | "session.deleted" | "session.diff"
+        | "session.error" | "session.idle" | "session.compacted"
+        | "message.updated" | "message.removed" | "message.part.updated"
+        | "message.part.delta" | "message.part.removed"
+        | "file.edited" | "file.watcher.updated"
+        | "project.updated" | "vcs.branch.updated"
+        | "todo.updated" | "mcp.tools.changed" | "lsp.updated"
+        | "pty.created" | "pty.updated" | "pty.exited" | "pty.deleted"
+        | "permission.updated"
+        | "installation.updated" | "installation.update-available" => None,
+        "session.status" => {
+            let session_id = props
+                .get("sessionID")
+                .or_else(|| props.get("session_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            // The status field is an object like { "type": "busy" } or { "type": "idle" }.
+            let status_type = props
+                .get("status")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let busy = status_type == "busy";
+            Some(SseEvent::SessionStatus { session_id, busy })
+        }
+        other => {
+            if is_debug() {
+                eprintln!("[voice:debug] Unknown SSE event type: {}", other);
+            }
+            None
+        }
     }
+}
+
+/// Returns true when verbose debug logging is enabled via `VOICE_DEBUG=1`.
+fn is_debug() -> bool {
+    std::env::var("VOICE_DEBUG").map_or(false, |v| v == "1" || v == "true")
 }
 
 /// Computes the next reconnect delay using exponential backoff, capped at 30s.
@@ -363,6 +411,145 @@ mod tests {
             })
             .collect();
         assert_eq!(sequence, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+    }
+
+    // ── session.status ────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_session_status_busy() {
+        let json = r#"data: {"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionStatus { ref session_id, busy }
+                if session_id == "s1" && busy)
+        );
+    }
+
+    #[test]
+    fn test_parse_session_status_idle() {
+        let json = r#"data: {"type":"session.status","properties":{"sessionID":"s1","status":{"type":"idle"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionStatus { ref session_id, busy }
+                if session_id == "s1" && !busy)
+        );
+    }
+
+    #[test]
+    fn test_parse_session_status_retry() {
+        // "retry" is neither "busy" — should parse as not busy.
+        let json = r#"data: {"type":"session.status","properties":{"sessionID":"s1","status":{"type":"retry"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionStatus { busy, .. } if !busy)
+        );
+    }
+
+    #[test]
+    fn test_parse_session_status_missing_status_field() {
+        // Missing status object → defaults to not busy.
+        let json = r#"data: {"type":"session.status","properties":{"sessionID":"s1"}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionStatus { busy, .. } if !busy)
+        );
+    }
+
+    #[test]
+    fn test_parse_session_status_snake_case_session_id() {
+        // Uses "session_id" instead of "sessionID" — both should be supported.
+        let json = r#"data: {"type":"session.status","properties":{"session_id":"s2","status":{"type":"busy"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionStatus { ref session_id, busy }
+                if session_id == "s2" && busy)
+        );
+    }
+
+    // ── explicitly ignored events ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_ignored_session_events_return_none() {
+        for event_type in &[
+            "session.updated",
+            "session.created",
+            "session.deleted",
+            "session.diff",
+            "session.error",
+            "session.idle",
+            "session.compacted",
+        ] {
+            let json = format!(
+                r#"data: {{"type":"{}","properties":{{}}}}"#,
+                event_type
+            );
+            assert!(
+                parse_sse_block(&json).is_none(),
+                "{} should be explicitly ignored",
+                event_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_ignored_message_events_return_none() {
+        for event_type in &[
+            "message.updated",
+            "message.removed",
+            "message.part.updated",
+            "message.part.delta",
+            "message.part.removed",
+        ] {
+            let json = format!(
+                r#"data: {{"type":"{}","properties":{{}}}}"#,
+                event_type
+            );
+            assert!(
+                parse_sse_block(&json).is_none(),
+                "{} should be explicitly ignored",
+                event_type
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_ignored_misc_events_return_none() {
+        for event_type in &[
+            "file.edited",
+            "file.watcher.updated",
+            "project.updated",
+            "vcs.branch.updated",
+            "todo.updated",
+            "mcp.tools.changed",
+            "lsp.updated",
+            "pty.created",
+            "pty.updated",
+            "pty.exited",
+            "pty.deleted",
+            "permission.updated",
+            "installation.updated",
+            "installation.update-available",
+        ] {
+            let json = format!(
+                r#"data: {{"type":"{}","properties":{{}}}}"#,
+                event_type
+            );
+            assert!(
+                parse_sse_block(&json).is_none(),
+                "{} should be explicitly ignored",
+                event_type
+            );
+        }
+    }
+
+    // ── truly unknown events ──────────────────────────────────────────
+
+    #[test]
+    fn test_parse_truly_unknown_event_returns_none() {
+        // An event type not in the ignore list and not handled → still returns None.
+        assert!(parse_sse_block(
+            r#"data: {"type":"some.future.event","properties":{}}"#
+        ).is_none());
     }
 
     #[test]

@@ -60,11 +60,12 @@ const MIN_SAMPLES: usize = 8_000;
 
 /// Handles a toggle event in standard (non-push-to-talk) mode.
 ///
-/// If currently Idle, starts recording.  If currently Recording, stops and
-/// transcribes.  Other states are ignored.
+/// Starts recording from [`RecordingState::Idle`] or
+/// [`RecordingState::ApprovalPending`].  Stops recording from
+/// [`RecordingState::Recording`].  Other states are ignored.
 pub(crate) async fn handle_toggle(app: &mut VoiceApp) {
     match app.state {
-        RecordingState::Idle => {
+        RecordingState::Idle | RecordingState::ApprovalPending => {
             app.state = RecordingState::Recording;
             app.current_level = None;
             app.render_display();
@@ -88,10 +89,15 @@ pub(crate) async fn handle_toggle(app: &mut VoiceApp) {
 /// [`AppEvent::AudioChunk`] events, and transitions to
 /// [`RecordingState::Recording`].
 ///
+/// Recording is allowed from both [`RecordingState::Idle`] and
+/// [`RecordingState::ApprovalPending`].  In the latter case the user may
+/// be speaking to answer a pending approval, or to inject a new prompt —
+/// the transcription pipeline handles both.
+///
 /// If the recorder cannot be opened (e.g. no microphone), the error is
 /// reported via [`VoiceApp::handle_error`] and the state remains unchanged.
 pub(crate) async fn handle_push_to_talk_start(app: &mut VoiceApp) {
-    if app.state != RecordingState::Idle {
+    if app.state != RecordingState::Idle && app.state != RecordingState::ApprovalPending {
         return;
     }
 
@@ -436,6 +442,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_toggle_approval_pending_to_recording() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        app.state = RecordingState::ApprovalPending;
+        handle_toggle(&mut app).await;
+        assert_eq!(app.state, RecordingState::Recording);
+    }
+
+    #[tokio::test]
     async fn test_handle_toggle_ignores_transcribing_state() {
         let mut app = VoiceApp::new(test_config()).unwrap();
         app.state = RecordingState::Transcribing;
@@ -444,6 +458,24 @@ mod tests {
     }
 
     // ── handle_push_to_talk_start / stop ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_handle_push_to_talk_start_ignores_transcribing() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        app.state = RecordingState::Transcribing;
+        handle_push_to_talk_start(&mut app).await;
+        // Should remain Transcribing — PTT start is only allowed from Idle or ApprovalPending.
+        assert_eq!(app.state, RecordingState::Transcribing);
+    }
+
+    #[tokio::test]
+    async fn test_handle_push_to_talk_start_ignores_recording() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        app.state = RecordingState::Recording;
+        handle_push_to_talk_start(&mut app).await;
+        // Should remain Recording — PTT start is only allowed from Idle or ApprovalPending.
+        assert_eq!(app.state, RecordingState::Recording);
+    }
 
     #[tokio::test]
     async fn test_handle_push_to_talk_stop_ignores_idle() {

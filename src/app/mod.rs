@@ -272,6 +272,9 @@ impl VoiceApp {
                             session_id,
                             request_id,
                         },
+                        SseEvent::SessionStatus { session_id, busy } => {
+                            AppEvent::SessionStatus { session_id, busy }
+                        }
                     };
                     if event_tx_fwd.send(app_event).is_err() {
                         break;
@@ -375,6 +378,10 @@ impl VoiceApp {
                     request_id,
                 } => {
                     approval::handle_sse_question_rejected(self, &session_id, &request_id);
+                }
+
+                AppEvent::SessionStatus { session_id, busy } => {
+                    approval::handle_sse_session_status(self, &session_id, busy);
                 }
 
                 AppEvent::AudioChunk { rms_energy } => {

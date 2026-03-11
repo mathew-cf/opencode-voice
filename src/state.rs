@@ -42,6 +42,14 @@ pub enum AppEvent {
         session_id: String,
         request_id: String,
     },
+    /// Session status changed (busy/idle).
+    ///
+    /// Used to detect when the AI resumes work — implying any pending
+    /// approvals have been answered (possibly manually by the user).
+    SessionStatus {
+        session_id: String,
+        busy: bool,
+    },
     AudioChunk {
         rms_energy: f32,
     },

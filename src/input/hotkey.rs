@@ -9,35 +9,66 @@ use tokio_util::sync::CancellationToken;
 use crate::state::InputEvent;
 
 /// Returns the KEY_MAP mapping key names to rdev::Key variants.
+///
+/// Most keys use cross-platform `rdev::Key` variants. Keys where rdev's mapping
+/// differs between macOS and Linux (numpad, F13-F20, section sign) use
+/// `#[cfg(target_os)]` blocks with the correct platform-specific values.
 fn build_key_map() -> HashMap<&'static str, Key> {
     let mut m = HashMap::new();
 
-    // Numpad keys — rdev uses Kp0-Kp9 for numpad digits
-    m.insert("numpad_0", Key::Kp0);
-    m.insert("numpad_1", Key::Kp1);
-    m.insert("numpad_2", Key::Kp2);
-    m.insert("numpad_3", Key::Kp3);
-    m.insert("numpad_4", Key::Kp4);
-    m.insert("numpad_5", Key::Kp5);
-    m.insert("numpad_6", Key::Kp6);
-    m.insert("numpad_7", Key::Kp7);
-    m.insert("numpad_8", Key::Kp8);
-    m.insert("numpad_9", Key::Kp9);
-    m.insert("numpad_enter", Key::KpReturn);
-    // macOS keycode 0x41 = 65 for numpad decimal/dot
-    m.insert("numpad_decimal", Key::Unknown(65));
-    m.insert("numpad_dot", Key::Unknown(65));
-    // macOS keycode 0x45 = 69 for numpad plus/add
-    m.insert("numpad_plus", Key::KpPlus);
-    m.insert("numpad_add", Key::KpPlus);
-    m.insert("numpad_minus", Key::KpMinus);
-    m.insert("numpad_subtract", Key::KpMinus);
-    m.insert("numpad_multiply", Key::KpMultiply);
-    m.insert("numpad_divide", Key::KpDivide);
-    // macOS keycode 0x47 = 71 for numpad clear
-    m.insert("numpad_clear", Key::Unknown(71));
-    // macOS keycode 0x51 = 81 for numpad equals
-    m.insert("numpad_equals", Key::Unknown(81));
+    // Numpad keys — platform-specific because rdev maps these differently per OS.
+    //
+    // macOS: rdev does NOT map numpad CGKeyCodes to Key::Kp* variants; they all
+    //        come through as Key::Unknown(CGKeyCode).
+    // Linux: rdev correctly maps numpad keys to native Key::Kp* variants via X11.
+    #[cfg(target_os = "macos")]
+    {
+        m.insert("numpad_0", Key::Unknown(82)); // CGKeyCode 0x52
+        m.insert("numpad_1", Key::Unknown(83)); // CGKeyCode 0x53
+        m.insert("numpad_2", Key::Unknown(84)); // CGKeyCode 0x54
+        m.insert("numpad_3", Key::Unknown(85)); // CGKeyCode 0x55
+        m.insert("numpad_4", Key::Unknown(86)); // CGKeyCode 0x56
+        m.insert("numpad_5", Key::Unknown(87)); // CGKeyCode 0x57
+        m.insert("numpad_6", Key::Unknown(88)); // CGKeyCode 0x58
+        m.insert("numpad_7", Key::Unknown(89)); // CGKeyCode 0x59
+        m.insert("numpad_8", Key::Unknown(91)); // CGKeyCode 0x5B
+        m.insert("numpad_9", Key::Unknown(92)); // CGKeyCode 0x5C
+        m.insert("numpad_enter", Key::Unknown(76)); // CGKeyCode 0x4C
+        m.insert("numpad_decimal", Key::Unknown(65)); // CGKeyCode 0x41
+        m.insert("numpad_dot", Key::Unknown(65)); // CGKeyCode 0x41
+        m.insert("numpad_plus", Key::Unknown(69)); // CGKeyCode 0x45
+        m.insert("numpad_add", Key::Unknown(69)); // CGKeyCode 0x45
+        m.insert("numpad_minus", Key::Unknown(78)); // CGKeyCode 0x4E
+        m.insert("numpad_subtract", Key::Unknown(78)); // CGKeyCode 0x4E
+        m.insert("numpad_multiply", Key::Unknown(67)); // CGKeyCode 0x43
+        m.insert("numpad_divide", Key::Unknown(75)); // CGKeyCode 0x4B
+        m.insert("numpad_clear", Key::Unknown(71)); // CGKeyCode 0x47
+        m.insert("numpad_equals", Key::Unknown(81)); // CGKeyCode 0x51
+    }
+    #[cfg(target_os = "linux")]
+    {
+        m.insert("numpad_0", Key::Kp0);
+        m.insert("numpad_1", Key::Kp1);
+        m.insert("numpad_2", Key::Kp2);
+        m.insert("numpad_3", Key::Kp3);
+        m.insert("numpad_4", Key::Kp4);
+        m.insert("numpad_5", Key::Kp5);
+        m.insert("numpad_6", Key::Kp6);
+        m.insert("numpad_7", Key::Kp7);
+        m.insert("numpad_8", Key::Kp8);
+        m.insert("numpad_9", Key::Kp9);
+        m.insert("numpad_enter", Key::KpReturn);
+        m.insert("numpad_decimal", Key::KpDelete); // rdev maps KEY_KPDOT to KpDelete
+        m.insert("numpad_dot", Key::KpDelete);
+        m.insert("numpad_plus", Key::KpPlus);
+        m.insert("numpad_add", Key::KpPlus);
+        m.insert("numpad_minus", Key::KpMinus);
+        m.insert("numpad_subtract", Key::KpMinus);
+        m.insert("numpad_multiply", Key::KpMultiply);
+        m.insert("numpad_divide", Key::KpDivide);
+        m.insert("numpad_clear", Key::NumLock); // macOS "Clear" is Num Lock position on PC
+        m.insert("numpad_equals", Key::Unknown(125)); // X11 keycode for KEY_KPEQUAL
+    }
 
     // Modifier keys
     m.insert("right_option", Key::AltGr);
@@ -72,16 +103,32 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("f11", Key::F11);
     m.insert("f12", Key::F12);
 
-    // Function keys F13-F20 — rdev has no native variants, use macOS virtual keycodes
-    // (Carbon/HIToolbox keycodes, same as TypeScript KEY_MAP)
-    m.insert("f13", Key::Unknown(105)); // 0x69
-    m.insert("f14", Key::Unknown(107)); // 0x6b
-    m.insert("f15", Key::Unknown(113)); // 0x71
-    m.insert("f16", Key::Unknown(106)); // 0x6a
-    m.insert("f17", Key::Unknown(64)); // 0x40
-    m.insert("f18", Key::Unknown(79)); // 0x4f
-    m.insert("f19", Key::Unknown(80)); // 0x50
-    m.insert("f20", Key::Unknown(90)); // 0x5a
+    // Function keys F13-F20 — rdev has no native variants on any platform.
+    //
+    // macOS: Uses CGKeyCodes (Carbon/HIToolbox virtual keycodes).
+    // Linux: Uses X11 keycodes (evdev keycode + 8) via the listen() path.
+    #[cfg(target_os = "macos")]
+    {
+        m.insert("f13", Key::Unknown(105)); // CGKeyCode 0x69
+        m.insert("f14", Key::Unknown(107)); // CGKeyCode 0x6B
+        m.insert("f15", Key::Unknown(113)); // CGKeyCode 0x71
+        m.insert("f16", Key::Unknown(106)); // CGKeyCode 0x6A
+        m.insert("f17", Key::Unknown(64)); // CGKeyCode 0x40
+        m.insert("f18", Key::Unknown(79)); // CGKeyCode 0x4F
+        m.insert("f19", Key::Unknown(80)); // CGKeyCode 0x50
+        m.insert("f20", Key::Unknown(90)); // CGKeyCode 0x5A
+    }
+    #[cfg(target_os = "linux")]
+    {
+        m.insert("f13", Key::Unknown(191)); // X11 keycode (evdev 183 + 8)
+        m.insert("f14", Key::Unknown(192)); // X11 keycode (evdev 184 + 8)
+        m.insert("f15", Key::Unknown(193)); // X11 keycode (evdev 185 + 8)
+        m.insert("f16", Key::Unknown(194)); // X11 keycode (evdev 186 + 8)
+        m.insert("f17", Key::Unknown(195)); // X11 keycode (evdev 187 + 8)
+        m.insert("f18", Key::Unknown(196)); // X11 keycode (evdev 188 + 8)
+        m.insert("f19", Key::Unknown(197)); // X11 keycode (evdev 189 + 8)
+        m.insert("f20", Key::Unknown(198)); // X11 keycode (evdev 190 + 8)
+    }
 
     // Common keys
     m.insert("space", Key::Space);
@@ -109,8 +156,12 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("num_lock", Key::NumLock);
 
     // Punctuation / symbols
-    // macOS keycode 0x0a = 10 for section sign (§)
+    // Section sign (§) — the ISO 102nd key (between left-shift and Z on ISO keyboards).
+    // macOS: CGKeyCode 0x0A. Linux: rdev maps it to IntlBackslash via X11.
+    #[cfg(target_os = "macos")]
     m.insert("section", Key::Unknown(10));
+    #[cfg(target_os = "linux")]
+    m.insert("section", Key::IntlBackslash);
     m.insert("grave", Key::BackQuote);
     m.insert("minus", Key::Minus);
     m.insert("equal", Key::Equal);
@@ -354,14 +405,14 @@ mod tests {
     fn test_resolve_key_numpad_0() {
         let result = resolve_key("numpad_0");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Key::Kp0);
+        assert!(matches!(result.unwrap(), Key::Unknown(82))); // macOS 0x52
     }
 
     #[test]
     fn test_resolve_key_numpad_enter() {
         let result = resolve_key("numpad_enter");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Key::KpReturn);
+        assert!(matches!(result.unwrap(), Key::Unknown(76))); // macOS 0x4C
     }
 
     #[test]

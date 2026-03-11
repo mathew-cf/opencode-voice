@@ -41,6 +41,11 @@ impl ApprovalQueue {
         self.items.push_back(PendingApproval::Question(request));
     }
 
+    /// Removes all items from the queue.
+    pub fn clear(&mut self) {
+        self.items.clear();
+    }
+
     /// Removes the item with the given request ID. Returns true if found and removed.
     pub fn remove(&mut self, request_id: &str) -> bool {
         if let Some(pos) = self.items.iter().position(|item| item.id() == request_id) {
@@ -160,6 +165,41 @@ mod tests {
 
         q.add_permission(make_permission("x"));
         assert!(q.has_pending());
+    }
+
+    #[test]
+    fn test_clear_empties_queue() {
+        let mut q = ApprovalQueue::new();
+        q.add_permission(make_permission("a"));
+        q.add_question(make_question("b"));
+        q.add_permission(make_permission("c"));
+        assert_eq!(q.len(), 3);
+
+        q.clear();
+        assert_eq!(q.len(), 0);
+        assert!(!q.has_pending());
+        assert!(q.peek().is_none());
+    }
+
+    #[test]
+    fn test_clear_on_empty_queue() {
+        let mut q = ApprovalQueue::new();
+        q.clear(); // Should not panic.
+        assert_eq!(q.len(), 0);
+    }
+
+    #[test]
+    fn test_clear_then_reuse() {
+        let mut q = ApprovalQueue::new();
+        q.add_permission(make_permission("a"));
+        q.add_question(make_question("b"));
+        q.clear();
+
+        // Queue should be fully functional after clear.
+        q.add_permission(make_permission("c"));
+        assert_eq!(q.len(), 1);
+        assert!(q.has_pending());
+        assert_eq!(q.peek().unwrap().id(), "c");
     }
 
     // --- Additional tests added to expand coverage ---
