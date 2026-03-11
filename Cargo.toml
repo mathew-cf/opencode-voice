@@ -1,0 +1,33 @@
+[package]
+name = "opencode-voice"
+version = "0.1.0"
+edition = "2021"
+description = "A cli utility to control opencode using voice via the HTTP API"
+license = "Apache-2.0"
+
+[[bin]]
+name = "opencode-voice"
+path = "src/main.rs"
+
+[lib]
+name = "opencode_voice"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+cpal = "0.15"
+hound = "3.5"
+whisper-rs = { version = "0.13", features = ["raw-api"] }
+rdev = "0.5"
+anyhow = "1"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+indicatif = "0.17"
+tokio-util = { version = "0.7", features = ["rt"] }
+futures = "0.3"

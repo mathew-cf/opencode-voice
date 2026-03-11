@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target
+debug/
+**/*.rs.bk
+
+# Cargo lock (remove this line if building a binary/application)
+Cargo.lock
+
+# Environment
+.env
+.env.local
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+# opencode-blueprint
+.blueprint/
