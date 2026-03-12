@@ -64,6 +64,9 @@ impl CpalRecorder {
             )?
         };
 
+        // Store the resolved device name for debugging.
+        self.device_name = device.name().ok();
+
         let (energy_tx, energy_rx) = tokio::sync::mpsc::unbounded_channel::<f32>();
 
         let stream = self.build_stream(&device, energy_tx.clone())?;
@@ -400,6 +403,11 @@ impl CpalRecorder {
         }
 
         Ok(samples)
+    }
+
+    /// Returns the resolved audio device name (available after `start()`).
+    pub fn device_name(&self) -> Option<&str> {
+        self.device_name.as_deref()
     }
 
     /// Returns the elapsed recording duration in seconds.

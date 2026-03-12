@@ -170,6 +170,7 @@ mod tests {
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
             approval_mode: true,
+            debug: false,
         }
     }
 

@@ -8,7 +8,6 @@ pub mod recording;
 pub mod approval;
 
 use anyhow::Result;
-use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::audio::capture::CpalRecorder;
@@ -78,11 +77,26 @@ pub struct VoiceApp {
     /// Current error message for the error display.
     pub(crate) current_error: Option<String>,
 
-    /// Throttle: last time we rendered an AudioChunk update.
-    last_audio_render: Option<Instant>,
+    /// Spinner frame counter for animated states (Transcribing).
+    spinner_frame: usize,
+
+    /// Suppresses the next Toggle event after a KeyUp. The evdev listener
+    /// sends KeyUp+Toggle on key release; without this flag the Toggle
+    /// would re-start recording after KeyUp completed the full pipeline.
+    suppress_next_toggle: bool,
+
+    /// Counter for throttling debug audio level output.
+    debug_audio_counter: usize,
 }
 
 impl VoiceApp {
+    /// Prints a debug log line with `\r\n` (works correctly in raw mode).
+    pub(crate) fn debug_log(&self, msg: std::fmt::Arguments) {
+        if self.config.debug {
+            eprint!("[debug] {}\r\n", msg);
+        }
+    }
+
     /// Creates a new `VoiceApp` from the given configuration.
     ///
     /// Loads the Whisper engine synchronously (blocking) before entering the
@@ -136,7 +150,9 @@ impl VoiceApp {
             last_transcript: None,
             current_level: None,
             current_error: None,
-            last_audio_render: None,
+            spinner_frame: 0,
+            suppress_next_toggle: false,
+            debug_audio_counter: 0,
         })
     }
 
@@ -151,8 +167,8 @@ impl VoiceApp {
             );
         }
 
-        // Warn (non-fatal) if OpenCode is not reachable.
-        if !self.bridge.is_connected().await {
+        // Warn (non-fatal) if OpenCode is not reachable. Skip in debug mode.
+        if !self.config.debug && !self.bridge.is_connected().await {
             eprintln!(
                 "[voice] Warning: Cannot connect to OpenCode at port {}. \
                  Make sure OpenCode is running with --port {}.",
@@ -160,44 +176,8 @@ impl VoiceApp {
             );
         }
 
-        // Show welcome banner.
-        self.display.show_welcome(
-            &self.config.toggle_key.to_string(),
-            self.config.use_global_hotkey,
-            &self.config.global_hotkey,
-            self.config.push_to_talk,
-        );
-
-        // Spawn keyboard input on a dedicated OS thread (crossterm poll loop is blocking).
-        if is_tty() {
-            let kb_sender = self.event_tx.clone();
-            let kb_cancel = self.cancel.clone();
-            let toggle_key = self.config.toggle_key;
-
-            // We need an UnboundedSender<InputEvent> to pass to KeyboardInput.
-            // Bridge it through a small forwarding task.
-            let (input_tx, mut input_rx) =
-                tokio::sync::mpsc::unbounded_channel::<InputEvent>();
-
-            let event_tx_fwd = self.event_tx.clone();
-            tokio::spawn(async move {
-                while let Some(ev) = input_rx.recv().await {
-                    let _ = event_tx_fwd.send(AppEvent::Input(ev));
-                }
-            });
-
-            std::thread::spawn(move || {
-                let kb = KeyboardInput::new(toggle_key, input_tx, kb_cancel);
-                if let Err(e) = kb.run() {
-                    eprintln!("[voice] Keyboard input error: {}", e);
-                }
-                // Send Quit when the keyboard thread exits so the event loop
-                // knows to shut down.
-                let _ = kb_sender.send(AppEvent::Input(InputEvent::Quit));
-            });
-        }
-
-        // Spawn global hotkey on a dedicated OS thread (rdev::listen blocks).
+        // Set up global hotkey before the welcome banner so the banner
+        // reflects any fallback from PTT to toggle mode.
         if self.config.use_global_hotkey {
             let hotkey_name = self.config.global_hotkey.clone();
             let cancel = self.cancel.clone();
@@ -222,12 +202,62 @@ impl VoiceApp {
                 }
                 Err(e) => {
                     eprintln!("[voice] Warning: Could not set up global hotkey: {}", e);
+                    if self.config.push_to_talk {
+                        eprintln!("[voice] Falling back to toggle mode (press space to start/stop recording).");
+                        self.config.push_to_talk = false;
+                    }
                 }
             }
         }
 
-        // Spawn SSE event bridge if approval mode is enabled.
-        if self.config.approval_mode {
+        // Show welcome banner BEFORE spawning the keyboard thread.
+        // The keyboard thread enables raw mode, which breaks println!
+        // (\n no longer includes \r, causing lines to shift right).
+        if self.config.debug {
+            self.debug_log(format_args!("mode: {}", if self.config.push_to_talk { "push-to-talk" } else { "toggle" }));
+            self.debug_log(format_args!("hotkey: {} ({})", self.config.global_hotkey,
+                if self.config.use_global_hotkey { "enabled" } else { "disabled" }));
+            self.debug_log(format_args!("toggle key: '{}'", self.config.toggle_key));
+            self.debug_log(format_args!("device: {}", self.config.audio_device.as_deref().unwrap_or("(default)")));
+            self.debug_log(format_args!("model: {} ({})", self.config.model_size,
+                if self.whisper.is_some() { "loaded" } else { "not loaded" }));
+            self.debug_log(format_args!("ready"));
+        } else {
+            self.display.show_welcome(
+                &self.config.toggle_key.to_string(),
+                self.config.use_global_hotkey,
+                &self.config.global_hotkey,
+                self.config.push_to_talk,
+            );
+        }
+
+        // Spawn keyboard input on a dedicated OS thread (crossterm poll loop is blocking).
+        if is_tty() {
+            let kb_sender = self.event_tx.clone();
+            let kb_cancel = self.cancel.clone();
+            let toggle_key = self.config.toggle_key;
+
+            let (input_tx, mut input_rx) =
+                tokio::sync::mpsc::unbounded_channel::<InputEvent>();
+
+            let event_tx_fwd = self.event_tx.clone();
+            tokio::spawn(async move {
+                while let Some(ev) = input_rx.recv().await {
+                    let _ = event_tx_fwd.send(AppEvent::Input(ev));
+                }
+            });
+
+            std::thread::spawn(move || {
+                let kb = KeyboardInput::new(toggle_key, input_tx, kb_cancel);
+                if let Err(e) = kb.run() {
+                    eprintln!("[voice] Keyboard input error: {}", e);
+                }
+                let _ = kb_sender.send(AppEvent::Input(InputEvent::Quit));
+            });
+        }
+
+        // Spawn SSE event bridge if approval mode is enabled (skip in debug mode).
+        if self.config.approval_mode && !self.config.debug {
             let (sse_tx, mut sse_rx) =
                 tokio::sync::mpsc::unbounded_channel::<SseEvent>();
 
@@ -286,8 +316,29 @@ impl VoiceApp {
         // Register SIGINT / SIGTERM signal handlers.
         self.register_signal_handlers();
 
-        // Render initial idle state.
-        self.render_display();
+        // Spawn a 10 Hz UI tick for animations (recording timer, spinner).
+        // Skip in debug mode — no animated display.
+        if !self.config.debug {
+            let tick_tx = self.event_tx.clone();
+            let tick_cancel = self.cancel.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+                loop {
+                    interval.tick().await;
+                    if tick_cancel.is_cancelled() {
+                        break;
+                    }
+                    if tick_tx.send(AppEvent::Tick).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        // Render initial idle state (skip in debug mode).
+        if !self.config.debug {
+            self.render_display();
+        }
 
         // Enter the main event loop.
         self.run_event_loop().await;
@@ -385,16 +436,23 @@ impl VoiceApp {
                 }
 
                 AppEvent::AudioChunk { rms_energy } => {
+                    // Just store the level; the Tick timer handles rendering.
+                    if self.config.debug {
+                        self.debug_audio_counter += 1;
+                        if self.debug_audio_counter % 10 == 0 {
+                            self.debug_log(format_args!("audio level: {:.4}", rms_energy));
+                        }
+                    }
                     self.current_level = Some(rms_energy);
-                    // Throttle display updates to ~10 fps to avoid spammy output.
-                    let now = Instant::now();
-                    let should_render = self
-                        .last_audio_render
-                        .map(|t| now.duration_since(t).as_millis() >= 100)
-                        .unwrap_or(true);
-                    if should_render {
-                        self.last_audio_render = Some(now);
-                        self.render_display();
+                }
+
+                AppEvent::Tick => {
+                    match self.state {
+                        RecordingState::Recording | RecordingState::Transcribing => {
+                            self.spinner_frame = self.spinner_frame.wrapping_add(1);
+                            self.render_display();
+                        }
+                        _ => {}
                     }
                 }
 
@@ -416,18 +474,27 @@ impl VoiceApp {
 
     /// Handles an [`InputEvent`] from keyboard or global hotkey.
     async fn handle_input(&mut self, event: InputEvent) {
+        self.debug_log(format_args!("input: {:?}  state: {:?}", event, self.state));
         match event {
             InputEvent::Toggle => {
-                if self.config.push_to_talk {
-                    // PTT is driven by KeyDown/KeyUp; ignore Toggle to prevent
-                    // the global hotkey's KeyRelease (which sends both KeyUp
-                    // and Toggle) from re-starting recording after KeyUp
-                    // already stopped it.
-                } else {
-                    // Standard toggle mode.
-                    recording::handle_toggle(self).await;
+                    if self.suppress_next_toggle {
+                        self.suppress_next_toggle = false;
+                    } else if self.config.push_to_talk {
+                        // Terminal keyboard (space) in PTT mode: route through
+                        // PTT start/stop so it works as a toggle.
+                        match self.state {
+                            RecordingState::Idle => {
+                                recording::handle_push_to_talk_start(self).await;
+                            }
+                            RecordingState::Recording => {
+                                recording::handle_push_to_talk_stop(self).await;
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        recording::handle_toggle(self).await;
+                    }
                 }
-            }
 
             InputEvent::KeyDown => {
                 if self.config.push_to_talk {
@@ -437,6 +504,7 @@ impl VoiceApp {
 
             InputEvent::KeyUp => {
                 if self.config.push_to_talk {
+                    self.suppress_next_toggle = true;
                     recording::handle_push_to_talk_stop(self).await;
                 }
             }
@@ -475,14 +543,20 @@ impl VoiceApp {
         // Cancel all background tasks.
         self.cancel.cancel();
 
-        // Clear the terminal display.
-        self.display.clear();
+        // Clear the terminal display (skip in debug mode).
+        if !self.config.debug {
+            self.display.clear();
+        }
 
         eprintln!("[voice] Shutting down.");
     }
 
     /// Renders the current state to the terminal display.
+    /// No-op in debug mode.
     pub(crate) fn render_display(&mut self) {
+        if self.config.debug {
+            return;
+        }
         let toggle_key_str = self.config.toggle_key.to_string();
         let approval = self.approval_queue.peek();
         let approval_count = self.approval_queue.len();
@@ -490,9 +564,14 @@ impl VoiceApp {
         // Read live duration from the active recorder.
         let duration = self.recorder.as_ref().map(|r| r.duration());
 
-        // Amplify level for display — raw RMS from speech is typically
-        // 0.01–0.1, which would render as an empty bar at width 8.
-        let display_level = self.current_level.map(|l| (l * 5.0).min(1.0));
+        // Convert RMS to a perceptual (logarithmic) display level.
+        // Raw RMS varies wildly across mic/OS/gain setups (0.001–0.3).
+        // Linear scaling breaks for quiet mics. dB scale works universally:
+        //   -60 dB (silence) → 0.0,  0 dB (full-scale) → 1.0
+        let display_level = self.current_level.map(|l| {
+            let db = 20.0 * l.max(1e-7).log10();
+            ((db + 60.0) / 60.0).clamp(0.0, 1.0)
+        });
 
         let global_hotkey_name = if self.config.use_global_hotkey {
             Some(self.config.global_hotkey.as_str())
@@ -509,6 +588,7 @@ impl VoiceApp {
             approval_count: Some(approval_count),
             transcript: self.last_transcript.as_deref(),
             duration,
+            spinner_frame: self.spinner_frame,
         };
 
         self.display.update(self.state, &meta);
@@ -536,6 +616,7 @@ mod tests {
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
             approval_mode: false,
+            debug: false,
         }
     }
 
