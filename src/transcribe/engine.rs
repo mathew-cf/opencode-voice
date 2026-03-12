@@ -110,6 +110,8 @@ impl WhisperEngine {
 
         // Strip timestamp brackets like [HH:MM:SS.mmm --> HH:MM:SS.mmm]
         let clean_text = strip_timestamps(&raw_text);
+        // Filter out Whisper hallucination artifacts (e.g. "[BLANK_AUDIO]")
+        let clean_text = strip_hallucinations(&clean_text);
         let final_text = clean_text.trim().to_string();
 
         Ok(TranscriptionResult { text: final_text })
@@ -132,6 +134,34 @@ fn suppress_whisper_logging() {
         whisper_rs::whisper_rs_sys::whisper_log_set(Some(noop_log), std::ptr::null_mut());
         whisper_rs::whisper_rs_sys::ggml_log_set(Some(noop_log), std::ptr::null_mut());
     }
+}
+
+/// Known Whisper hallucination phrases that should be treated as silence.
+///
+/// These are bracketed tags or repeated filler phrases that Whisper emits
+/// when the audio contains silence, noise, or non-speech content.
+const WHISPER_HALLUCINATIONS: &[&str] = &[
+    "[BLANK_AUDIO]",
+    "[NO_SPEECH]",
+    "(blank audio)",
+    "(no speech)",
+    "[silence]",
+    "(silence)",
+];
+
+/// Removes known Whisper hallucination artifacts from transcribed text.
+///
+/// If the entire text (after removal) is empty, returns an empty string
+/// so the caller treats it the same as silence.
+fn strip_hallucinations(text: &str) -> String {
+    let mut result = text.to_string();
+    for pattern in WHISPER_HALLUCINATIONS {
+        // Case-insensitive removal
+        while let Some(pos) = result.to_lowercase().find(&pattern.to_lowercase()) {
+            result = format!("{}{}", &result[..pos], &result[pos + pattern.len()..]);
+        }
+    }
+    result
 }
 
 /// Strips whisper timestamp annotations from transcribed text.
@@ -193,5 +223,27 @@ mod tests {
         let input = "Hello [world]";
         let result = strip_timestamps(input);
         assert!(result.contains("[world]")); // Non-timestamp bracket preserved
+    }
+
+    #[test]
+    fn test_strip_hallucinations_blank_audio() {
+        assert_eq!(strip_hallucinations("[BLANK_AUDIO]").trim(), "");
+    }
+
+    #[test]
+    fn test_strip_hallucinations_case_insensitive() {
+        assert_eq!(strip_hallucinations("[blank_audio]").trim(), "");
+        assert_eq!(strip_hallucinations("[Blank_Audio]").trim(), "");
+    }
+
+    #[test]
+    fn test_strip_hallucinations_preserves_real_text() {
+        assert_eq!(strip_hallucinations("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_hallucinations_mixed() {
+        let result = strip_hallucinations("[BLANK_AUDIO] hello [BLANK_AUDIO]");
+        assert_eq!(result.trim(), "hello");
     }
 }

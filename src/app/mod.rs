@@ -23,6 +23,15 @@ use crate::transcribe::engine::WhisperEngine;
 use crate::transcribe::setup::is_whisper_ready;
 use crate::ui::display::{Display, DisplayMeta};
 
+/// Returns a human-readable label for the toggle key character.
+/// Turns `' '` into `"Space"` so the UI doesn't show a blank.
+fn format_toggle_key(ch: char) -> String {
+    match ch {
+        ' ' => "Space".into(),
+        c => c.to_string(),
+    }
+}
+
 /// The central application struct that owns all subsystem state.
 ///
 /// Fields are `pub(crate)` so that `recording` and `approval` submodules can
@@ -224,7 +233,7 @@ impl VoiceApp {
             self.debug_log(format_args!("ready"));
         } else {
             self.display.show_welcome(
-                &self.config.toggle_key.to_string(),
+                &format_toggle_key(self.config.toggle_key),
                 self.config.use_global_hotkey,
                 &self.config.global_hotkey,
                 self.config.push_to_talk,
@@ -557,7 +566,7 @@ impl VoiceApp {
         if self.config.debug {
             return;
         }
-        let toggle_key_str = self.config.toggle_key.to_string();
+        let toggle_key_str = format_toggle_key(self.config.toggle_key);
         let approval = self.approval_queue.peek();
         let approval_count = self.approval_queue.len();
 
