@@ -22,11 +22,16 @@ pub fn is_model_valid(path: &Path) -> bool {
 /// In-process whisper transcription engine.
 pub struct WhisperEngine {
     ctx: whisper_rs::WhisperContext,
+    /// Whether the loaded model is multilingual (requires explicit language hint).
+    multilingual: bool,
 }
 
 impl WhisperEngine {
     /// Loads a GGML model file and creates a WhisperEngine.
-    pub fn new(model_path: &Path) -> Result<Self> {
+    ///
+    /// When `multilingual` is `true`, the engine will set `language = "en"` on
+    /// each transcription request to avoid auto-detection overhead.
+    pub fn new(model_path: &Path, multilingual: bool) -> Result<Self> {
         if !model_path.exists() {
             anyhow::bail!(
                 "Whisper model not found at {}. Run 'opencode-voice setup' to download it.",
@@ -49,7 +54,7 @@ impl WhisperEngine {
         )
         .map_err(|e| anyhow::anyhow!("Failed to load whisper model: {:?}", e))?;
 
-        Ok(WhisperEngine { ctx })
+        Ok(WhisperEngine { ctx, multilingual })
     }
 
     /// Transcribes a WAV file and returns the text.
@@ -83,6 +88,12 @@ impl WhisperEngine {
         params.set_print_timestamps(false);
         params.set_no_timestamps(true);
         params.set_single_segment(false);
+
+        // Multilingual models need an explicit language hint to avoid
+        // auto-detection overhead and ensure English transcription.
+        if self.multilingual {
+            params.set_language(Some("en"));
+        }
 
         // Run transcription
         let mut state = self

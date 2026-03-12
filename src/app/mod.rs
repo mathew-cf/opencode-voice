@@ -117,7 +117,7 @@ impl VoiceApp {
         // This is intentional: whisper-rs model loading is CPU-bound and must
         // not block the tokio runtime.
         let whisper = if is_whisper_ready(&config.data_dir, &config.model_size) {
-            match WhisperEngine::new(&config.whisper_model_path) {
+            match WhisperEngine::new(&config.whisper_model_path, config.model_size.is_multilingual()) {
                 Ok(engine) => {
                     Some(engine)
                 }
@@ -265,8 +265,8 @@ impl VoiceApp {
             });
         }
 
-        // Spawn SSE event bridge if approval mode is enabled (skip in debug mode).
-        if self.config.approval_mode && !self.config.debug {
+        // Spawn SSE event bridge for permission/question handling.
+        if self.config.handle_prompts && !self.config.debug {
             let (sse_tx, mut sse_rx) =
                 tokio::sync::mpsc::unbounded_channel::<SseEvent>();
 
@@ -624,7 +624,7 @@ mod tests {
             use_global_hotkey: false,
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
-            approval_mode: false,
+            handle_prompts: false,
             debug: false,
         }
     }

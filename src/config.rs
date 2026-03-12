@@ -5,11 +5,19 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 /// Whisper model size selection.
+///
+/// English-only variants (`*.en`) are fine-tuned on English and slightly more
+/// accurate for standard accents.  Multilingual variants are trained on 99
+/// languages and handle accented English better because they've seen more
+/// diverse phonetic patterns.
 #[derive(Debug, Clone)]
 pub enum ModelSize {
     TinyEn,
     BaseEn,
     SmallEn,
+    Tiny,
+    Base,
+    Small,
 }
 
 impl Default for ModelSize {
@@ -24,7 +32,17 @@ impl std::fmt::Display for ModelSize {
             ModelSize::TinyEn => write!(f, "tiny.en"),
             ModelSize::BaseEn => write!(f, "base.en"),
             ModelSize::SmallEn => write!(f, "small.en"),
+            ModelSize::Tiny => write!(f, "tiny"),
+            ModelSize::Base => write!(f, "base"),
+            ModelSize::Small => write!(f, "small"),
         }
+    }
+}
+
+impl ModelSize {
+    /// Returns `true` for multilingual models (without the `.en` suffix).
+    pub fn is_multilingual(&self) -> bool {
+        matches!(self, ModelSize::Tiny | ModelSize::Base | ModelSize::Small)
     }
 }
 
@@ -33,11 +51,14 @@ impl std::str::FromStr for ModelSize {
 
     fn from_str(s: &str) -> Result<Self> {
         match s {
-            "tiny.en" | "tiny" => Ok(ModelSize::TinyEn),
-            "base.en" | "base" => Ok(ModelSize::BaseEn),
-            "small.en" | "small" => Ok(ModelSize::SmallEn),
+            "tiny.en" => Ok(ModelSize::TinyEn),
+            "base.en" => Ok(ModelSize::BaseEn),
+            "small.en" => Ok(ModelSize::SmallEn),
+            "tiny" => Ok(ModelSize::Tiny),
+            "base" => Ok(ModelSize::Base),
+            "small" => Ok(ModelSize::Small),
             _ => Err(anyhow::anyhow!(
-                "Unknown model size: {}. Valid: tiny.en, base.en, small.en",
+                "Unknown model size: {}. Valid: tiny.en, tiny, base.en, base, small.en, small",
                 s
             )),
         }
@@ -95,13 +116,17 @@ pub struct CliArgs {
     #[arg(long = "no-auto-submit", global = true)]
     pub no_auto_submit: bool,
 
-    /// Enable approval mode for permission/question handling (default: true)
-    #[arg(long = "approval", global = true, overrides_with = "no_approval")]
-    pub approval: bool,
+    /// Handle OpenCode permission and question prompts via voice (default: true)
+    #[arg(
+        long = "handle-prompts",
+        global = true,
+        overrides_with = "no_handle_prompts"
+    )]
+    pub handle_prompts: bool,
 
-    /// Disable approval mode
-    #[arg(long = "no-approval", global = true)]
-    pub no_approval: bool,
+    /// Disable voice handling of OpenCode prompts
+    #[arg(long = "no-handle-prompts", global = true)]
+    pub no_handle_prompts: bool,
 
     /// Debug mode: log key events, audio info, transcripts to stderr; skip OpenCode
     #[arg(long, global = true)]
@@ -114,7 +139,7 @@ pub enum Commands {
     Run,
     /// Download and set up the whisper model
     Setup {
-        /// Model size to download (tiny.en, base.en, small.en)
+        /// Model size to download (tiny, base, small, tiny.en, base.en, small.en)
         #[arg(long, short = 'm')]
         model: Option<ModelSize>,
     },
@@ -138,7 +163,7 @@ pub struct AppConfig {
     pub use_global_hotkey: bool,
     pub global_hotkey: String,
     pub push_to_talk: bool,
-    pub approval_mode: bool,
+    pub handle_prompts: bool,
     pub debug: bool,
 }
 
@@ -187,14 +212,13 @@ impl AppConfig {
             true
         };
         let use_global_hotkey = !cli.no_global;
-        let approval_mode = if cli.no_approval {
+        let handle_prompts = if cli.no_handle_prompts {
             false
-        } else if cli.approval {
+        } else if cli.handle_prompts {
             true
         } else {
             true
         };
-
         let whisper_model_path = crate::transcribe::setup::get_model_path(&data_dir, &model_size);
 
         Ok(AppConfig {
@@ -211,7 +235,7 @@ impl AppConfig {
                 .clone()
                 .unwrap_or_else(|| "right_option".to_string()),
             push_to_talk,
-            approval_mode,
+            handle_prompts,
             debug: cli.debug,
             whisper_model_path,
         })
@@ -268,7 +292,7 @@ mod tests {
         ));
         assert!(matches!(
             "tiny".parse::<ModelSize>().unwrap(),
-            ModelSize::TinyEn
+            ModelSize::Tiny
         ));
         assert!(matches!(
             "base.en".parse::<ModelSize>().unwrap(),
@@ -276,7 +300,7 @@ mod tests {
         ));
         assert!(matches!(
             "base".parse::<ModelSize>().unwrap(),
-            ModelSize::BaseEn
+            ModelSize::Base
         ));
         assert!(matches!(
             "small.en".parse::<ModelSize>().unwrap(),
@@ -284,7 +308,7 @@ mod tests {
         ));
         assert!(matches!(
             "small".parse::<ModelSize>().unwrap(),
-            ModelSize::SmallEn
+            ModelSize::Small
         ));
     }
 
@@ -362,20 +386,30 @@ mod tests {
     }
 
     #[test]
-    fn test_model_size_fromstr_short_aliases() {
-        // "tiny", "base", "small" are also valid aliases
+    fn test_model_size_fromstr_short_aliases_are_multilingual() {
+        // "tiny", "base", "small" (without .en) map to multilingual variants
         assert!(matches!(
             "tiny".parse::<ModelSize>().unwrap(),
-            ModelSize::TinyEn
+            ModelSize::Tiny
         ));
         assert!(matches!(
             "base".parse::<ModelSize>().unwrap(),
-            ModelSize::BaseEn
+            ModelSize::Base
         ));
         assert!(matches!(
             "small".parse::<ModelSize>().unwrap(),
-            ModelSize::SmallEn
+            ModelSize::Small
         ));
+    }
+
+    #[test]
+    fn test_model_size_is_multilingual() {
+        assert!(!ModelSize::TinyEn.is_multilingual());
+        assert!(!ModelSize::BaseEn.is_multilingual());
+        assert!(!ModelSize::SmallEn.is_multilingual());
+        assert!(ModelSize::Tiny.is_multilingual());
+        assert!(ModelSize::Base.is_multilingual());
+        assert!(ModelSize::Small.is_multilingual());
     }
 
     #[test]
@@ -408,7 +442,7 @@ mod tests {
 
     /// Test AppConfig default field values by constructing a minimal struct literal.
     /// This verifies the documented defaults: auto_submit=true, push_to_talk=true,
-    /// approval_mode=true, vad_mode=false, use_global_hotkey=true.
+    /// handle_prompts=true, use_global_hotkey=true.
     #[test]
     fn test_app_config_default_field_values() {
         let config = AppConfig {
@@ -423,13 +457,16 @@ mod tests {
             use_global_hotkey: true,
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
-            approval_mode: true,
+            handle_prompts: true,
             debug: false,
         };
 
         assert!(config.auto_submit, "auto_submit default should be true");
         assert!(config.push_to_talk, "push_to_talk default should be true");
-        assert!(config.approval_mode, "approval_mode default should be true");
+        assert!(
+            config.handle_prompts,
+            "handle_prompts default should be true"
+        );
         assert!(
             config.use_global_hotkey,
             "use_global_hotkey default should be true"
@@ -454,7 +491,7 @@ mod tests {
             use_global_hotkey: true,
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
-            approval_mode: true,
+            handle_prompts: true,
             debug: false,
         };
 

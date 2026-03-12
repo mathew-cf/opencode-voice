@@ -35,22 +35,33 @@ async fn read_line(prompt: &str) -> Result<String> {
 
 /// Interactively prompts the user to choose a Whisper model size.
 ///
-/// Presents a numbered menu (1=tiny.en, 2=base.en, 3=small.en) and loops
-/// until a valid choice is entered.  Returns the selected [`ModelSize`].
+/// Presents a numbered menu of English-only and multilingual models.
+/// Multilingual models handle accented English better; English-only models
+/// are slightly more accurate for standard accents.
 async fn prompt_model_choice() -> Result<ModelSize> {
     println!("Choose a Whisper model size:");
-    println!("  1) tiny.en  — fastest, least accurate (~75 MB)");
-    println!("  2) base.en  — balanced speed and accuracy (~142 MB)");
-    println!("  3) small.en — most accurate, slower (~466 MB)");
+    println!();
+    println!("  English-only (best for standard accents):");
+    println!("    1) tiny.en  — fastest, least accurate (~75 MB)");
+    println!("    2) base.en  — balanced speed and accuracy (~142 MB)");
+    println!("    3) small.en — most accurate, slower (~466 MB)");
+    println!();
+    println!("  Multilingual (better for accented English):");
+    println!("    4) tiny     — fastest, least accurate (~75 MB)");
+    println!("    5) base     — balanced speed and accuracy (~142 MB)");
+    println!("    6) small    — most accurate, slower (~466 MB)");
 
     loop {
-        let choice = read_line("Enter choice [1-3] (default: 2): ").await?;
+        let choice = read_line("Enter choice [1-6] (default: 2): ").await?;
         let model = match choice.as_str() {
             "1" => ModelSize::TinyEn,
             "" | "2" => ModelSize::BaseEn,
             "3" => ModelSize::SmallEn,
+            "4" => ModelSize::Tiny,
+            "5" => ModelSize::Base,
+            "6" => ModelSize::Small,
             other => {
-                eprintln!("Invalid choice '{}'. Please enter 1, 2, or 3.", other);
+                eprintln!("Invalid choice '{}'. Please enter 1-6.", other);
                 continue;
             }
         };

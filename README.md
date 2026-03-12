@@ -44,13 +44,27 @@ Hold **space** to record, release to transcribe and send. Press **q** to quit.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port <n>` | *(required)* | OpenCode server port |
-| `--model <size>` | `base.en` | Whisper model (`tiny.en`, `base.en`, `small.en`) |
+| `--model <size>` | `base.en` | Whisper model (see below) |
 | `--device <name>` | system default | Audio input device |
 | `--key <name>` | `space` | Toggle key for recording |
 | `--hotkey <name>` | `right_option` | Global hotkey (system-wide) |
 | `--no-global` | — | Disable global hotkey |
 | `--no-push-to-talk` | — | Toggle mode instead of hold-to-talk |
-| `--no-approval` | — | Skip transcript review before sending |
+| `--no-auto-submit` | — | Don't auto-submit; leave transcript in prompt for review |
+| `--no-handle-prompts` | — | Don't handle OpenCode permission/question prompts via voice |
+
+### Models
+
+English-only models are fine-tuned on English and generally more accurate. Multilingual models support 99 languages and may help with some accents, but the biggest improvement for accent robustness comes from using a larger model size.
+
+| Model | Type | Size |
+|-------|------|------|
+| `tiny.en` | English-only | ~75 MB |
+| `base.en` | English-only (default) | ~142 MB |
+| `small.en` | English-only | ~466 MB |
+| `tiny` | Multilingual | ~75 MB |
+| `base` | Multilingual | ~142 MB |
+| `small` | Multilingual | ~466 MB |
 
 Environment variables: `OPENCODE_VOICE_PORT`, `OPENCODE_VOICE_MODEL`, `OPENCODE_SERVER_PASSWORD`.
 
