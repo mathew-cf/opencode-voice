@@ -55,5 +55,7 @@ pub enum AppEvent {
     },
     /// Sent after a 3-second delay to transition back to Idle from Error state.
     RecoverFromError,
+    /// Periodic UI tick (~10 Hz) for animations (recording timer, spinner).
+    Tick,
     Shutdown,
 }

@@ -10,6 +10,9 @@ use std::io::{self, Write};
 use crate::approval::types::PendingApproval;
 use crate::state::RecordingState;
 
+/// Braille-dot spinner frames for animated states.
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// Optional metadata for the display renderer.
 #[derive(Default)]
 pub struct DisplayMeta<'a> {
@@ -23,6 +26,8 @@ pub struct DisplayMeta<'a> {
     pub global_hotkey_name: Option<&'a str>,
     pub approval: Option<&'a PendingApproval>,
     pub approval_count: Option<usize>,
+    /// Monotonically increasing frame counter for spinner animation.
+    pub spinner_frame: usize,
 }
 
 /// Renders an ASCII level bar like `[||||    ]`.
@@ -121,17 +126,13 @@ impl Display {
         global_hotkey_name: &str,
         push_to_talk: bool,
     ) {
-        let mode = if push_to_talk {
-            if global_hotkey {
-                format!("Hold [{}] to record (global hotkey)", global_hotkey_name)
-            } else {
-                format!("Hold [{}] to record", toggle_key)
-            }
-        } else {
-            format!("Press [{}] to toggle recording", toggle_key)
-        };
         println!("\x1b[1;36m━━━ OpenCode Voice Mode ━━━\x1b[0m");
-        println!("  {}", mode);
+        if push_to_talk && global_hotkey {
+            println!("  Hold [{}] to record (global hotkey)", global_hotkey_name);
+            println!("  Press [{}] to toggle recording (terminal)", toggle_key);
+        } else {
+            println!("  Press [{}] to toggle recording", toggle_key);
+        }
         println!("  Press [q] or Ctrl+C to quit");
         println!();
     }
@@ -170,7 +171,8 @@ impl Display {
                 )]
             }
             RecordingState::Transcribing => {
-                vec!["\x1b[33m◌ Transcribing...\x1b[0m".to_string()]
+                let frame = SPINNER_FRAMES[meta.spinner_frame % SPINNER_FRAMES.len()];
+                vec![format!("\x1b[33m{} Transcribing...\x1b[0m", frame)]
             }
             RecordingState::Injecting => {
                 vec!["\x1b[36m→ Sending to OpenCode...\x1b[0m".to_string()]

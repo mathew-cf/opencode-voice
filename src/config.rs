@@ -102,6 +102,10 @@ pub struct CliArgs {
     /// Disable approval mode
     #[arg(long = "no-approval", global = true)]
     pub no_approval: bool,
+
+    /// Debug mode: log key events, audio info, transcripts to stderr; skip OpenCode
+    #[arg(long, global = true)]
+    pub debug: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -135,6 +139,7 @@ pub struct AppConfig {
     pub global_hotkey: String,
     pub push_to_talk: bool,
     pub approval_mode: bool,
+    pub debug: bool,
 }
 
 impl AppConfig {
@@ -143,13 +148,14 @@ impl AppConfig {
     pub fn load(cli: &CliArgs) -> Result<Self> {
         let data_dir = get_data_dir();
 
-        // Port: CLI > env var > error
+        // Port: CLI > env var > default (0 in debug mode) > error
         let port_env = std::env::var("OPENCODE_VOICE_PORT")
             .ok()
             .and_then(|s| s.parse::<u16>().ok());
         let port = cli
             .port
             .or(port_env)
+            .or(if cli.debug { Some(0) } else { None })
             .context("OpenCode server port is required. Use --port or set OPENCODE_VOICE_PORT")?;
 
         // Model: CLI > env var > default
@@ -206,6 +212,7 @@ impl AppConfig {
                 .unwrap_or_else(|| "right_option".to_string()),
             push_to_talk,
             approval_mode,
+            debug: cli.debug,
             whisper_model_path,
         })
     }
@@ -417,6 +424,7 @@ mod tests {
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
             approval_mode: true,
+            debug: false,
         };
 
         assert!(config.auto_submit, "auto_submit default should be true");
@@ -447,6 +455,7 @@ mod tests {
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
             approval_mode: true,
+            debug: false,
         };
 
         assert_eq!(config.opencode_port, 8080);

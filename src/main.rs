@@ -66,6 +66,18 @@ async fn prompt_model_choice() -> Result<ModelSize> {
 /// code 1.
 #[tokio::main]
 async fn main() {
+    // Suppress noisy ALSA/JACK/PulseAudio warnings from cpal's C libraries.
+    // These write directly to stderr and cannot be caught by Rust.
+    if std::env::var_os("PIPEWIRE_LOG_LEVEL").is_none() {
+        std::env::set_var("PIPEWIRE_LOG_LEVEL", "0");
+    }
+    if std::env::var_os("JACK_NO_START_SERVER").is_none() {
+        std::env::set_var("JACK_NO_START_SERVER", "1");
+    }
+    if std::env::var_os("JACK_NO_AUDIO_RESERVATION").is_none() {
+        std::env::set_var("JACK_NO_AUDIO_RESERVATION", "1");
+    }
+
     if let Err(e) = run().await {
         eprintln!("Error: {:#}", e);
         std::process::exit(1);
@@ -144,9 +156,9 @@ async fn run() -> Result<()> {
             let mut app = crate::app::VoiceApp::new(config)?;
             app.start().await?;
 
-            // Force-exit the process. The rdev global-hotkey thread calls
-            // rdev::listen() which blocks forever and cannot be cancelled,
-            // so a graceful join is not possible.  All cleanup (display clear,
+            // Force-exit the process. The global hotkey listener thread
+            // blocks forever on input events and cannot be cancelled, so a
+            // graceful join is not possible.  All cleanup (display clear,
             // cancellation token, etc.) has already been performed by
             // VoiceApp::shutdown() before we reach this point.
             std::process::exit(0);

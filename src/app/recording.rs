@@ -138,6 +138,13 @@ pub(crate) async fn handle_push_to_talk_start(app: &mut VoiceApp) {
     // Store the recorder so handle_push_to_talk_stop can retrieve it.
     app.recorder = Some(recorder);
 
+    {
+        let name = app.recorder.as_ref()
+            .and_then(|r| r.device_name())
+            .unwrap_or("unknown");
+        app.debug_log(format_args!("recording started  device: {}", name));
+    }
+
     app.state = RecordingState::Recording;
     app.current_level = None;
     app.render_display();
@@ -177,6 +184,8 @@ pub(crate) async fn handle_push_to_talk_stop(app: &mut VoiceApp) {
             return;
         }
     };
+
+    app.debug_log(format_args!("recording stopped  duration: {:.2}s  samples: {}", duration, samples.len()));
 
     // Discard very short recordings.
     if duration < MIN_RECORDING_SECS || samples.len() < MIN_SAMPLES {
@@ -253,6 +262,18 @@ pub(crate) async fn handle_push_to_talk_stop(app: &mut VoiceApp) {
     };
 
     let text = transcript.text.trim().to_string();
+
+    if app.config.debug {
+        if text.is_empty() {
+            app.debug_log(format_args!("transcript: (empty)"));
+        } else {
+            app.debug_log(format_args!("transcript: {}", text));
+        }
+        // In debug mode, skip OpenCode injection entirely.
+        app.last_transcript = if text.is_empty() { None } else { Some(text) };
+        return_to_idle_or_approval(app);
+        return;
+    }
 
     if text.is_empty() {
         // Nothing transcribed — return to idle without injecting.
@@ -420,6 +441,7 @@ mod tests {
             global_hotkey: "right_option".to_string(),
             push_to_talk: false,
             approval_mode: false,
+            debug: false,
         }
     }
 
