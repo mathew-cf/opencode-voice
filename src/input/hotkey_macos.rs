@@ -11,26 +11,27 @@ use crate::state::InputEvent;
 fn build_key_map() -> HashMap<&'static str, Key> {
     let mut m = HashMap::new();
 
-    // Numpad keys
-    m.insert("numpad_0", Key::Kp0);
-    m.insert("numpad_1", Key::Kp1);
-    m.insert("numpad_2", Key::Kp2);
-    m.insert("numpad_3", Key::Kp3);
-    m.insert("numpad_4", Key::Kp4);
-    m.insert("numpad_5", Key::Kp5);
-    m.insert("numpad_6", Key::Kp6);
-    m.insert("numpad_7", Key::Kp7);
-    m.insert("numpad_8", Key::Kp8);
-    m.insert("numpad_9", Key::Kp9);
-    m.insert("numpad_enter", Key::KpReturn);
-    m.insert("numpad_decimal", Key::Unknown(65));
-    m.insert("numpad_dot", Key::Unknown(65));
-    m.insert("numpad_plus", Key::KpPlus);
-    m.insert("numpad_add", Key::KpPlus);
-    m.insert("numpad_minus", Key::KpMinus);
-    m.insert("numpad_subtract", Key::KpMinus);
-    m.insert("numpad_multiply", Key::KpMultiply);
-    m.insert("numpad_divide", Key::KpDivide);
+    // Numpad keys — rdev does NOT map numpad CGKeyCodes to Key::Kp* variants
+    // on macOS; they all come through as Key::Unknown(CGKeyCode).
+    m.insert("numpad_0", Key::Unknown(82)); // CGKeyCode 0x52
+    m.insert("numpad_1", Key::Unknown(83)); // CGKeyCode 0x53
+    m.insert("numpad_2", Key::Unknown(84)); // CGKeyCode 0x54
+    m.insert("numpad_3", Key::Unknown(85)); // CGKeyCode 0x55
+    m.insert("numpad_4", Key::Unknown(86)); // CGKeyCode 0x56
+    m.insert("numpad_5", Key::Unknown(87)); // CGKeyCode 0x57
+    m.insert("numpad_6", Key::Unknown(88)); // CGKeyCode 0x58
+    m.insert("numpad_7", Key::Unknown(89)); // CGKeyCode 0x59
+    m.insert("numpad_8", Key::Unknown(91)); // CGKeyCode 0x5B
+    m.insert("numpad_9", Key::Unknown(92)); // CGKeyCode 0x5C
+    m.insert("numpad_enter", Key::Unknown(76)); // CGKeyCode 0x4C
+    m.insert("numpad_decimal", Key::Unknown(65)); // CGKeyCode 0x41
+    m.insert("numpad_dot", Key::Unknown(65)); // CGKeyCode 0x41
+    m.insert("numpad_plus", Key::Unknown(69)); // CGKeyCode 0x45
+    m.insert("numpad_add", Key::Unknown(69)); // CGKeyCode 0x45
+    m.insert("numpad_minus", Key::Unknown(78)); // CGKeyCode 0x4E
+    m.insert("numpad_subtract", Key::Unknown(78)); // CGKeyCode 0x4E
+    m.insert("numpad_multiply", Key::Unknown(67)); // CGKeyCode 0x43
+    m.insert("numpad_divide", Key::Unknown(75)); // CGKeyCode 0x4B
     m.insert("numpad_clear", Key::Unknown(71)); // CGKeyCode 0x47
     m.insert("numpad_equals", Key::Unknown(81)); // CGKeyCode 0x51
 
