@@ -232,48 +232,7 @@ async fn test_reply_permission_always_with_message() {
     );
 }
 
-// ─── Test 9: health_check returns true when server is healthy ─────────────────
-
-#[tokio::test]
-async fn test_health_check_returns_true_when_healthy() {
-    let mock_server = MockServer::start().await;
-    let port = mock_server.address().port();
-
-    Mock::given(method("GET"))
-        .and(path("/global/health"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(r#"{"healthy":true,"version":"1.0"}"#),
-        )
-        .mount(&mock_server)
-        .await;
-
-    let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
-    let result = bridge.health_check().await;
-    assert!(result.is_ok());
-    assert!(result.unwrap(), "health_check should return true when healthy=true");
-}
-
-// ─── Test 10: health_check returns false on server error ──────────────────────
-
-#[tokio::test]
-async fn test_health_check_returns_false_on_server_error() {
-    let mock_server = MockServer::start().await;
-    let port = mock_server.address().port();
-
-    Mock::given(method("GET"))
-        .and(path("/global/health"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("{}"))
-        .mount(&mock_server)
-        .await;
-
-    let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
-    let result = bridge.health_check().await;
-    assert!(result.is_ok(), "health_check should not error on 500, got: {:?}", result);
-    assert!(!result.unwrap(), "health_check should return false on 500");
-}
-
-// ─── Test 11: list_sessions parses response correctly ─────────────────────────
+// ─── Test 9: list_sessions parses response correctly ──────────────────────────
 
 #[tokio::test]
 async fn test_list_sessions_parses_response() {
@@ -296,7 +255,6 @@ async fn test_list_sessions_parses_response() {
 
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].id, "sess_1");
-    assert_eq!(sessions[0].title, "My Session");
 
     // Verify the request hits the correct path
     let requests = mock_server.received_requests().await.unwrap();
@@ -328,7 +286,6 @@ async fn test_create_session_sends_empty_body() {
     let session = bridge.create_session().await.expect("create_session should succeed");
 
     assert_eq!(session.id, "new_sess");
-    assert_eq!(session.title, "New Session");
 
     let requests = mock_server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);

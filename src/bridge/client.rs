@@ -20,7 +20,6 @@ pub struct OpenCodeBridge {
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct SessionInfo {
     pub id: String,
-    pub title: String,
 }
 
 impl OpenCodeBridge {
@@ -116,15 +115,6 @@ impl OpenCodeBridge {
             anyhow::bail!("OpenCode API error {}: {}", status, body);
         }
         Ok(())
-    }
-
-    /// Checks if OpenCode is healthy. Returns Ok(true) if healthy, Ok(false) otherwise.
-    pub async fn health_check(&self) -> Result<bool> {
-        let result: Result<serde_json::Value> = self.get_json("/global/health").await;
-        match result {
-            Ok(value) => Ok(value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false)),
-            Err(_) => Ok(false),
-        }
     }
 
     /// Lists recent sessions.

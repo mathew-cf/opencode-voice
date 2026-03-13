@@ -446,7 +446,6 @@ mod tests {
             use_global_hotkey: false,
             global_hotkey: "right_option".to_string(),
             push_to_talk: false,
-            handle_prompts: false,
             debug: false,
         }
     }

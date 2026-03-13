@@ -108,18 +108,6 @@ pub struct CliArgs {
     #[arg(long = "no-push-to-talk", global = true)]
     pub no_push_to_talk: bool,
 
-    /// Handle OpenCode permission and question prompts via voice (default: true)
-    #[arg(
-        long = "handle-prompts",
-        global = true,
-        overrides_with = "no_handle_prompts"
-    )]
-    pub handle_prompts: bool,
-
-    /// Disable voice handling of OpenCode prompts
-    #[arg(long = "no-handle-prompts", global = true)]
-    pub no_handle_prompts: bool,
-
     /// Debug mode: log key events, audio info, transcripts to stderr; skip OpenCode
     #[arg(long, global = true)]
     pub debug: bool,
@@ -154,7 +142,6 @@ pub struct AppConfig {
     pub use_global_hotkey: bool,
     pub global_hotkey: String,
     pub push_to_talk: bool,
-    pub handle_prompts: bool,
     pub debug: bool,
 }
 
@@ -192,13 +179,6 @@ impl AppConfig {
             true
         };
         let use_global_hotkey = !cli.no_global;
-        let handle_prompts = if cli.no_handle_prompts {
-            false
-        } else if cli.handle_prompts {
-            true
-        } else {
-            true
-        };
         let whisper_model_path = crate::transcribe::setup::get_model_path(&data_dir, &model_size);
 
         Ok(AppConfig {
@@ -214,7 +194,6 @@ impl AppConfig {
                 .clone()
                 .unwrap_or_else(|| "right_option".to_string()),
             push_to_talk,
-            handle_prompts,
             debug: cli.debug,
             whisper_model_path,
         })
@@ -421,7 +400,7 @@ mod tests {
 
     /// Test AppConfig default field values by constructing a minimal struct literal.
     /// This verifies the documented defaults: push_to_talk=true,
-    /// handle_prompts=true, use_global_hotkey=true.
+    /// use_global_hotkey=true.
     #[test]
     fn test_app_config_default_field_values() {
         let config = AppConfig {
@@ -435,15 +414,10 @@ mod tests {
             use_global_hotkey: true,
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
-            handle_prompts: true,
             debug: false,
         };
 
         assert!(config.push_to_talk, "push_to_talk default should be true");
-        assert!(
-            config.handle_prompts,
-            "handle_prompts default should be true"
-        );
         assert!(
             config.use_global_hotkey,
             "use_global_hotkey default should be true"
@@ -467,7 +441,6 @@ mod tests {
             use_global_hotkey: true,
             global_hotkey: "right_option".to_string(),
             push_to_talk: true,
-            handle_prompts: true,
             debug: false,
         };
 
