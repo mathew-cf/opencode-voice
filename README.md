@@ -28,14 +28,21 @@ opencode-voice setup
 
 ## Run
 
-Start OpenCode with its HTTP server, then start opencode-voice in a separate terminal:
+Start OpenCode, then start opencode-voice in a separate terminal:
 
 ```bash
+# Option 1: Web mode (recommended)
+opencode web
+opencode-voice
+
+# Option 2: TUI mode with explicit port
 opencode --port 4096
 opencode-voice --port 4096
 ```
 
 Hold **space** to record, release to transcribe and send. Press **q** to quit.
+
+> **Note:** opencode-voice defaults to port 4096. If OpenCode binds to a different port, pass `--port <n>`.
 
 ---
 
@@ -43,14 +50,13 @@ Hold **space** to record, release to transcribe and send. Press **q** to quit.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port <n>` | *(required)* | OpenCode server port |
+| `--port <n>` | `4096` | OpenCode server port |
 | `--model <size>` | `base.en` | Whisper model (see below) |
 | `--device <name>` | system default | Audio input device |
 | `--key <name>` | `space` | Toggle key for recording |
 | `--hotkey <name>` | `right_option` | Global hotkey (system-wide) |
 | `--no-global` | — | Disable global hotkey |
 | `--no-push-to-talk` | — | Toggle mode instead of hold-to-talk |
-| `--no-auto-submit` | — | Don't auto-submit; leave transcript in prompt for review |
 | `--no-handle-prompts` | — | Don't handle OpenCode permission/question prompts via voice |
 
 ### Models
@@ -66,7 +72,7 @@ English-only models are fine-tuned on English and generally more accurate. Multi
 | `base` | Multilingual | ~142 MB |
 | `small` | Multilingual | ~466 MB |
 
-Environment variables: `OPENCODE_VOICE_PORT`, `OPENCODE_VOICE_MODEL`, `OPENCODE_SERVER_PASSWORD`.
+Environment variables: `OPENCODE_VOICE_PORT` (default: 4096), `OPENCODE_VOICE_MODEL`, `OPENCODE_SERVER_PASSWORD`.
 
 ## Other commands
 
@@ -80,12 +86,13 @@ opencode-voice keys                      List key names for --key / --hotkey
 
 | Problem | Fix |
 |---------|-----|
-| Can't connect to OpenCode | Make sure OpenCode is running with `--port` |
+| Can't connect to OpenCode | Make sure OpenCode is running (`opencode web` or `opencode --port`) |
 | No speech detected | Speak closer to mic, try `--model small.en`, check `opencode-voice devices` |
 | Whisper model not found | Run `opencode-voice setup` |
 | Global hotkeys don't work (macOS) | Grant Accessibility permission in System Settings, or use `--no-global` |
 | Auth errors (401) | Set `OPENCODE_SERVER_PASSWORD` env var |
 | Build failures | See [Building from source](BUILDING.md) |
+| Voice input not working with `opencode web` | Update to latest opencode-voice (v0.2+) |
 
 ## Platform support
 
