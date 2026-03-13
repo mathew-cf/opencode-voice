@@ -553,54 +553,92 @@ mod tests {
 
     // ── inject_text ─────────────────────────────────────────────────────────────
 
-    /// With an active session set, inject_text transitions through Injecting and
-    /// ends in Idle (success) or Error (bridge not reachable) — never stays Injecting.
+    /// With an active session set, inject_text sends the message and transitions
+    /// to Idle on success.
     #[tokio::test]
-    async fn test_inject_text_transitions_to_injecting_state() {
-        let mut app = VoiceApp::new(test_config()).unwrap();
+    async fn test_inject_text_sends_message_to_active_session() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/session/sess_1/prompt_async"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
         app.active_session = Some("sess_1".to_string());
+
         inject_text(&mut app, "hello world").await;
-        assert!(
-            matches!(app.state, RecordingState::Idle | RecordingState::Error),
-            "expected Idle or Error state after inject_text, got {:?}",
-            app.state
-        );
+
+        assert_eq!(app.state, RecordingState::Idle);
+        assert_eq!(mock_server.received_requests().await.unwrap().len(), 1);
     }
 
-    /// With no active session, inject_text tries to create one via the bridge.
-    /// Ends in Idle (session created + message sent) or Error (bridge unreachable).
+    /// With no active session, inject_text creates one via the bridge and then
+    /// sends the message, ending in Idle with the new session stored.
     #[tokio::test]
     async fn test_inject_text_creates_session_when_none() {
-        let mut app = VoiceApp::new(test_config()).unwrap();
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/session"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "new_sess", "title": "New"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/session/new_sess/prompt_async"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
         assert!(app.active_session.is_none());
+
         inject_text(&mut app, "test text").await;
-        assert!(
-            matches!(app.state, RecordingState::Idle | RecordingState::Error),
-            "expected Idle or Error state after inject_text, got {:?}",
-            app.state
-        );
+
+        assert_eq!(app.state, RecordingState::Idle);
+        assert_eq!(app.active_session, Some("new_sess".to_string()));
     }
 
-    /// With an active session, inject_text uses send_message (not create_session).
-    /// Ends in Idle or Error.
-    /// Also verifies inject_text does not set last_transcript (that's done by the caller).
+    /// When send_message returns a server error, inject_text transitions to Error.
     #[tokio::test]
-    async fn test_inject_text_with_active_session_uses_send_message() {
-        let mut app = VoiceApp::new(test_config()).unwrap();
-        app.active_session = Some("sess_abc".to_string());
-        // last_transcript is not set before calling inject_text.
-        assert!(app.last_transcript.is_none());
-        inject_text(&mut app, "voice command").await;
-        assert!(
-            matches!(app.state, RecordingState::Idle | RecordingState::Error),
-            "expected Idle or Error state after inject_text, got {:?}",
-            app.state
-        );
-        // inject_text does not set last_transcript — that is the caller's responsibility.
-        assert!(
-            app.last_transcript.is_none(),
-            "inject_text should not set last_transcript"
-        );
+    async fn test_inject_text_handles_send_message_failure() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/session/sess_1/prompt_async"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({"error": "server error"})),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
+        app.active_session = Some("sess_1".to_string());
+
+        inject_text(&mut app, "will fail").await;
+
+        assert_eq!(app.state, RecordingState::Error);
     }
 
     // ── try_handle_approval ──────────────────────────────────────────────────
@@ -662,13 +700,25 @@ mod tests {
     }
 
     /// A matching permission command removes the item from the queue and
-    /// returns true.  The bridge call will fail (no server running) but the
-    /// function should still return true and remove the item.
+    /// returns true.  Uses a wiremock mock server to verify the bridge call
+    /// to `POST /permission/p1/reply` is made with the correct body.
     #[tokio::test]
     async fn test_try_handle_approval_permission_match_removes_item_and_returns_true() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
         use crate::approval::types::PermissionRequest;
 
-        let mut app = VoiceApp::new(test_config()).unwrap();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/permission/p1/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
         app.approval_queue.add_permission(PermissionRequest {
             id: "p1".to_string(),
             permission: "bash".to_string(),
@@ -676,23 +726,44 @@ mod tests {
         });
         app.state = RecordingState::ApprovalPending;
 
-        // "yes" matches the Once permission pattern.
-        // The bridge call will fail (no server), but the item is still removed.
+        // "yes" matches the Once permission pattern and triggers POST /permission/p1/reply.
         let result = try_handle_approval(&mut app, "yes").await;
         assert!(result, "matched permission should return true");
         assert!(
             !app.approval_queue.has_pending(),
             "item should be removed from queue after match"
         );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly 1 bridge request");
+        assert_eq!(requests[0].url.path(), "/permission/p1/reply");
+        let body = std::str::from_utf8(&requests[0].body).unwrap();
+        assert!(
+            body.contains("\"reply\"") && body.contains("\"once\""),
+            "request body should contain reply:once, got: {body}"
+        );
     }
 
     /// A matching question answer removes the item from the queue and returns
-    /// true.
+    /// true.  Uses a wiremock mock server to verify the bridge call to
+    /// `POST /question/q1/reply` is made.
     #[tokio::test]
     async fn test_try_handle_approval_question_match_removes_item_and_returns_true() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
         use crate::approval::types::{QuestionInfo, QuestionOption, QuestionRequest};
 
-        let mut app = VoiceApp::new(test_config()).unwrap();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/question/q1/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
         app.approval_queue.add_question(QuestionRequest {
             id: "q1".to_string(),
             questions: vec![QuestionInfo {
@@ -710,22 +781,38 @@ mod tests {
         });
         app.state = RecordingState::ApprovalPending;
 
-        // "alpha" matches the first option exactly.
+        // "alpha" matches the first option exactly and triggers POST /question/q1/reply.
         let result = try_handle_approval(&mut app, "alpha").await;
         assert!(result, "matched question answer should return true");
         assert!(
             !app.approval_queue.has_pending(),
             "item should be removed from queue after match"
         );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly 1 bridge request");
     }
 
     /// A question rejection phrase removes the item from the queue and returns
-    /// true.
+    /// true.  Uses a wiremock mock server to verify the bridge call to
+    /// `POST /question/q2/reject` is made.
     #[tokio::test]
     async fn test_try_handle_approval_question_reject_removes_item_and_returns_true() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
         use crate::approval::types::{QuestionInfo, QuestionOption, QuestionRequest};
 
-        let mut app = VoiceApp::new(test_config()).unwrap();
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/question/q2/reject"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = test_config();
+        config.opencode_port = mock_server.address().port();
+        let mut app = VoiceApp::new(config).unwrap();
         app.approval_queue.add_question(QuestionRequest {
             id: "q2".to_string(),
             questions: vec![QuestionInfo {
@@ -738,13 +825,16 @@ mod tests {
         });
         app.state = RecordingState::ApprovalPending;
 
-        // "skip" is a question rejection phrase.
+        // "skip" is a question rejection phrase and triggers POST /question/q2/reject.
         let result = try_handle_approval(&mut app, "skip").await;
         assert!(result, "question rejection should return true");
         assert!(
             !app.approval_queue.has_pending(),
             "item should be removed from queue after rejection"
         );
+
+        let requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1, "expected exactly 1 bridge request");
     }
 
 }
