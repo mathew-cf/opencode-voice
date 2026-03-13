@@ -1,46 +1,14 @@
 //! Integration tests for OpenCodeBridge HTTP client.
 //!
-//! Each test spins up a minimal tokio TCP listener on port 0 (OS-assigned),
-//! sends a canned HTTP response, and verifies that the bridge client sends
-//! the correct request.
+//! Each test spins up a wiremock MockServer, mounts the expected route,
+//! and verifies that the bridge client sends the correct request.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use opencode_voice::bridge::client::OpenCodeBridge;
 use opencode_voice::bridge::client::SessionInfo;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
-
-/// Binds a TCP listener on port 0 and returns it together with the assigned port.
-async fn bind_listener() -> (TcpListener, u16) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    (listener, port)
-}
-
-/// Reads the full HTTP request from the socket (up to 8 KB) and returns it as a String.
-async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
-    let mut buf = vec![0u8; 8192];
-    let n = stream.read(&mut buf).await.unwrap_or(0);
-    String::from_utf8_lossy(&buf[..n]).to_string()
-}
-
-/// Sends a minimal HTTP 200 OK response with an optional JSON body.
-async fn send_ok(stream: &mut tokio::net::TcpStream, body: &str) {
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(response.as_bytes()).await.unwrap();
-}
-
-/// Sends a minimal HTTP 204 No Content response.
-async fn send_no_content(stream: &mut tokio::net::TcpStream) {
-    let response = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
-    stream.write_all(response.as_bytes()).await.unwrap();
-}
+use wiremock::matchers::{method, path, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 // ─── Test 1: get_base_url() returns correct values ───────────────────────────
 
@@ -74,16 +42,14 @@ async fn test_is_connected_returns_false_when_server_not_running() {
 
 #[tokio::test]
 async fn test_auth_header_sent_when_password_set() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_no_content(&mut stream).await;
-    });
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/session/.+/prompt_async$"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&mock_server)
+        .await;
 
     let password = "s3cr3t";
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, Some(password.to_string()));
@@ -92,20 +58,22 @@ async fn test_auth_header_sent_when_password_set() {
         .await
         .expect("send_message should succeed");
 
-    let req = captured.lock().await.clone();
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
 
     // Expected: Basic base64("opencode:s3cr3t") — username is "opencode"
-    // reqwest sends headers in lowercase (HTTP/2 style), so check case-insensitively.
     let expected_creds = STANDARD.encode(format!("opencode:{}", password));
     let expected_value = format!("Basic {}", expected_creds);
-    let req_lower = req.to_lowercase();
-    let expected_lower = format!("authorization: {}", expected_value.to_lowercase());
 
-    assert!(
-        req_lower.contains(&expected_lower),
-        "Request should contain auth header 'authorization: {}', got:\n{}",
+    let auth_header = requests[0]
+        .headers
+        .get("authorization")
+        .expect("Authorization header should be present");
+
+    assert_eq!(
+        auth_header.to_str().unwrap(),
         expected_value,
-        req
+        "Authorization header should be 'Basic <creds>'"
     );
 }
 
@@ -113,16 +81,14 @@ async fn test_auth_header_sent_when_password_set() {
 
 #[tokio::test]
 async fn test_no_auth_header_when_no_password() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_no_content(&mut stream).await;
-    });
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/session/.+/prompt_async$"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     bridge
@@ -130,9 +96,11 @@ async fn test_no_auth_header_when_no_password() {
         .await
         .expect("send_message should succeed");
 
-    let req = captured.lock().await.clone();
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+
     assert!(
-        !req.contains("Authorization:"),
+        requests[0].headers.get("authorization").is_none(),
         "Request should NOT contain Authorization header when no password is set"
     );
 }
@@ -143,16 +111,14 @@ async fn test_no_auth_header_when_no_password() {
 async fn test_reply_permission_sends_correct_request() {
     use opencode_voice::approval::types::PermissionReply;
 
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, "{}").await;
-    });
+    Mock::given(method("POST"))
+        .and(path("/permission/perm-123/reply"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     bridge
@@ -160,19 +126,16 @@ async fn test_reply_permission_sends_correct_request() {
         .await
         .expect("reply_permission should succeed");
 
-    let req = captured.lock().await.clone();
-
-    assert!(
-        req.starts_with("POST /permission/perm-123/reply"),
-        "Expected POST /permission/perm-123/reply, got: {}",
-        req.lines().next().unwrap_or("")
-    );
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/permission/perm-123/reply");
 
     // Body should contain the reply field
+    let body = String::from_utf8_lossy(&requests[0].body);
     assert!(
-        req.contains(r#""reply":"once""#) || req.contains(r#""reply": "once""#),
+        body.contains(r#""reply":"once""#) || body.contains(r#""reply": "once""#),
         "Request body should contain reply field: {}",
-        req
+        body
     );
 }
 
@@ -180,16 +143,14 @@ async fn test_reply_permission_sends_correct_request() {
 
 #[tokio::test]
 async fn test_reject_question_sends_correct_request() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, "{}").await;
-    });
+    Mock::given(method("POST"))
+        .and(path("/question/q-456/reject"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     bridge
@@ -197,12 +158,12 @@ async fn test_reject_question_sends_correct_request() {
         .await
         .expect("reject_question should succeed");
 
-    let req = captured.lock().await.clone();
-
-    assert!(
-        req.starts_with("POST /question/q-456/reject"),
-        "Expected POST /question/q-456/reject, got: {}",
-        req.lines().next().unwrap_or("")
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url.path(),
+        "/question/q-456/reject",
+        "Expected POST /question/q-456/reject"
     );
 }
 
@@ -210,25 +171,27 @@ async fn test_reject_question_sends_correct_request() {
 
 #[tokio::test]
 async fn test_is_connected_returns_true_when_server_running() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, r#"{"healthy":true,"version":"1.0"}"#).await;
-    });
+    Mock::given(method("GET"))
+        .and(path("/global/health"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"healthy":true,"version":"1.0"}"#),
+        )
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     assert!(bridge.is_connected().await);
 
-    let req = captured.lock().await.clone();
-    assert!(
-        req.contains("GET /global/health"),
-        "is_connected should hit /global/health, got: {}",
-        req.lines().next().unwrap_or("")
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url.path(),
+        "/global/health",
+        "is_connected should hit /global/health"
     );
 }
 
@@ -238,16 +201,14 @@ async fn test_is_connected_returns_true_when_server_running() {
 async fn test_reply_permission_always_with_message() {
     use opencode_voice::approval::types::PermissionReply;
 
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, "{}").await;
-    });
+    Mock::given(method("POST"))
+        .and(path("/permission/perm-789/reply"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("{}"))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     bridge
@@ -255,17 +216,19 @@ async fn test_reply_permission_always_with_message() {
         .await
         .expect("reply_permission should succeed");
 
-    let req = captured.lock().await.clone();
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
 
+    let body = String::from_utf8_lossy(&requests[0].body);
     assert!(
-        req.contains(r#""reply":"always""#) || req.contains(r#""reply": "always""#),
+        body.contains(r#""reply":"always""#) || body.contains(r#""reply": "always""#),
         "Body should contain always reply: {}",
-        req
+        body
     );
     assert!(
-        req.contains("approved by voice"),
+        body.contains("approved by voice"),
         "Body should contain the message: {}",
-        req
+        body
     );
 }
 
@@ -273,14 +236,17 @@ async fn test_reply_permission_always_with_message() {
 
 #[tokio::test]
 async fn test_health_check_returns_true_when_healthy() {
-    let (listener, port) = bind_listener().await;
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 4096];
-        let _ = stream.read(&mut buf).await;
-        send_ok(&mut stream, r#"{"healthy":true,"version":"1.0"}"#).await;
-    });
+    Mock::given(method("GET"))
+        .and(path("/global/health"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"healthy":true,"version":"1.0"}"#),
+        )
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     let result = bridge.health_check().await;
@@ -292,15 +258,14 @@ async fn test_health_check_returns_true_when_healthy() {
 
 #[tokio::test]
 async fn test_health_check_returns_false_on_server_error() {
-    let (listener, port) = bind_listener().await;
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut buf = vec![0u8; 4096];
-        let _ = stream.read(&mut buf).await;
-        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
-        stream.write_all(response.as_bytes()).await.unwrap();
-    });
+    Mock::given(method("GET"))
+        .and(path("/global/health"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("{}"))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     let result = bridge.health_check().await;
@@ -312,16 +277,19 @@ async fn test_health_check_returns_false_on_server_error() {
 
 #[tokio::test]
 async fn test_list_sessions_parses_response() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, r#"[{"id":"sess_1","title":"My Session","time_updated":1234567890}]"#).await;
-    });
+    // wiremock's path() matcher matches the path portion only (ignores query strings)
+    Mock::given(method("GET"))
+        .and(path("/session"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                r#"[{"id":"sess_1","title":"My Session","time_updated":1234567890}]"#,
+            ),
+        )
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     let sessions: Vec<SessionInfo> = bridge.list_sessions().await.expect("list_sessions should succeed");
@@ -331,11 +299,12 @@ async fn test_list_sessions_parses_response() {
     assert_eq!(sessions[0].title, "My Session");
 
     // Verify the request hits the correct path
-    let req = captured.lock().await.clone();
-    assert!(
-        req.contains("GET /session"),
-        "list_sessions should hit /session, got: {}",
-        req.lines().next().unwrap_or("")
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url.path(),
+        "/session",
+        "list_sessions should hit /session"
     );
 }
 
@@ -343,16 +312,17 @@ async fn test_list_sessions_parses_response() {
 
 #[tokio::test]
 async fn test_create_session_sends_empty_body() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_ok(&mut stream, r#"{"id":"new_sess","title":"New Session"}"#).await;
-    });
+    Mock::given(method("POST"))
+        .and(path("/session"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"id":"new_sess","title":"New Session"}"#),
+        )
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     let session = bridge.create_session().await.expect("create_session should succeed");
@@ -360,28 +330,28 @@ async fn test_create_session_sends_empty_body() {
     assert_eq!(session.id, "new_sess");
     assert_eq!(session.title, "New Session");
 
-    let req = captured.lock().await.clone();
-    assert!(
-        req.starts_with("POST /session"),
-        "create_session should POST to /session, got: {}",
-        req.lines().next().unwrap_or("")
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].url.path(),
+        "/session",
+        "create_session should POST to /session"
     );
+    assert_eq!(requests[0].method.as_str(), "POST");
 }
 
 // ─── Test 13: send_message sends correct request ──────────────────────────────
 
 #[tokio::test]
 async fn test_send_message_sends_correct_request() {
-    let (listener, port) = bind_listener().await;
-    let captured = Arc::new(Mutex::new(String::new()));
-    let captured_clone = captured.clone();
+    let mock_server = MockServer::start().await;
+    let port = mock_server.address().port();
 
-    tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let req = read_request(&mut stream).await;
-        *captured_clone.lock().await = req;
-        send_no_content(&mut stream).await;
-    });
+    Mock::given(method("POST"))
+        .and(path("/session/sess_abc/prompt_async"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&mock_server)
+        .await;
 
     let bridge = OpenCodeBridge::new("http://127.0.0.1", port, None);
     bridge
@@ -389,24 +359,21 @@ async fn test_send_message_sends_correct_request() {
         .await
         .expect("send_message should succeed");
 
-    let req = captured.lock().await.clone();
-    let first_line = req.lines().next().unwrap_or("");
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/session/sess_abc/prompt_async");
 
-    assert!(
-        first_line.contains("POST /session/sess_abc/prompt_async"),
-        "send_message should POST to /session/sess_abc/prompt_async, got: {}",
-        first_line
-    );
+    let body = String::from_utf8_lossy(&requests[0].body);
 
     // Body should contain the parts array with type=text
     assert!(
-        req.contains(r#""type":"text""#) || req.contains(r#""type": "text""#),
+        body.contains(r#""type":"text""#) || body.contains(r#""type": "text""#),
         "Body should contain type=text in parts: {}",
-        req
+        body
     );
     assert!(
-        req.contains("hello world"),
+        body.contains("hello world"),
         "Body should contain the message text: {}",
-        req
+        body
     );
 }
