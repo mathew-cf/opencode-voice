@@ -299,24 +299,31 @@ pub(crate) async fn handle_push_to_talk_stop(app: &mut VoiceApp) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Injects `text` into OpenCode and transitions to Injecting → Idle.
+/// Sends `text` to the active OpenCode session and transitions to Injecting → Idle.
 ///
-/// Calls `bridge.append_prompt` and, if `auto_submit` is enabled,
-/// `bridge.submit_prompt`.  On error, calls `handle_error`.
+/// If no active session exists, creates one first. On error, calls `handle_error`.
 async fn inject_text(app: &mut VoiceApp, text: &str) {
     app.state = RecordingState::Injecting;
     app.render_display();
 
-    if let Err(e) = app.bridge.append_prompt(text, None, None).await {
-        app.handle_error(&format!("Failed to inject text: {}", e));
-        return;
+    // Ensure we have an active session.
+    if app.active_session.is_none() {
+        match app.bridge.create_session().await {
+            Ok(session) => {
+                eprintln!("[voice] Created session: {}", session.id);
+                app.active_session = Some(session.id);
+            }
+            Err(e) => {
+                app.handle_error(&format!("Failed to create session: {}", e));
+                return;
+            }
+        }
     }
 
-    if app.config.auto_submit {
-        if let Err(e) = app.bridge.submit_prompt().await {
-            app.handle_error(&format!("Failed to submit prompt: {}", e));
-            return;
-        }
+    let session_id = app.active_session.as_ref().unwrap().clone();
+    if let Err(e) = app.bridge.send_message(&session_id, text).await {
+        app.handle_error(&format!("Failed to send message: {}", e));
+        return;
     }
 
     return_to_idle_or_approval(app);
@@ -433,7 +440,6 @@ mod tests {
             opencode_port: 4096,
             toggle_key: ' ',
             model_size: ModelSize::TinyEn,
-            auto_submit: true,
             server_password: None,
             data_dir: PathBuf::from("/nonexistent/data"),
             audio_device: None,

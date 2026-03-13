@@ -673,7 +673,6 @@ mod tests {
             opencode_port: 4096,
             toggle_key: ' ',
             model_size: ModelSize::TinyEn,
-            auto_submit: true,
             server_password: None,
             data_dir: PathBuf::from("/nonexistent/data"),
             audio_device: None,

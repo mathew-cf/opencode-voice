@@ -148,7 +148,6 @@ pub struct AppConfig {
     pub opencode_port: u16,
     pub toggle_key: char,
     pub model_size: ModelSize,
-    pub auto_submit: bool,
     pub server_password: Option<String>,
     pub data_dir: PathBuf,
     pub audio_device: Option<String>,
@@ -206,7 +205,6 @@ impl AppConfig {
             opencode_port: port,
             toggle_key: cli.key.unwrap_or(' '),
             model_size,
-            auto_submit: true,
             server_password,
             data_dir,
             audio_device,
@@ -422,7 +420,7 @@ mod tests {
     }
 
     /// Test AppConfig default field values by constructing a minimal struct literal.
-    /// This verifies the documented defaults: auto_submit=true, push_to_talk=true,
+    /// This verifies the documented defaults: push_to_talk=true,
     /// handle_prompts=true, use_global_hotkey=true.
     #[test]
     fn test_app_config_default_field_values() {
@@ -431,7 +429,6 @@ mod tests {
             opencode_port: 3000,
             toggle_key: ' ',
             model_size: ModelSize::TinyEn,
-            auto_submit: true,
             server_password: None,
             data_dir: std::path::PathBuf::from("/tmp"),
             audio_device: None,
@@ -442,7 +439,6 @@ mod tests {
             debug: false,
         };
 
-        assert!(config.auto_submit, "auto_submit default should be true");
         assert!(config.push_to_talk, "push_to_talk default should be true");
         assert!(
             config.handle_prompts,
@@ -465,7 +461,6 @@ mod tests {
             opencode_port: 8080,
             toggle_key: ' ',
             model_size: ModelSize::BaseEn,
-            auto_submit: true,
             server_password: None,
             data_dir: std::path::PathBuf::from("/tmp"),
             audio_device: None,
