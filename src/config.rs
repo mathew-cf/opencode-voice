@@ -1,6 +1,6 @@
 //! CLI argument parsing and application configuration.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -72,7 +72,7 @@ pub struct CliArgs {
     #[command(subcommand)]
     pub command: Option<Commands>,
 
-    /// OpenCode server port (required for the run subcommand)
+    /// OpenCode server port [default: 4096]
     #[arg(long, short = 'p', global = true)]
     pub port: Option<u16>,
 
@@ -107,14 +107,6 @@ pub struct CliArgs {
     /// Disable push-to-talk mode
     #[arg(long = "no-push-to-talk", global = true)]
     pub no_push_to_talk: bool,
-
-    /// Enable auto-submit after transcription (default: true)
-    #[arg(long = "auto-submit", global = true, overrides_with = "no_auto_submit")]
-    pub auto_submit: bool,
-
-    /// Disable auto-submit
-    #[arg(long = "no-auto-submit", global = true)]
-    pub no_auto_submit: bool,
 
     /// Handle OpenCode permission and question prompts via voice (default: true)
     #[arg(
@@ -173,15 +165,11 @@ impl AppConfig {
     pub fn load(cli: &CliArgs) -> Result<Self> {
         let data_dir = get_data_dir();
 
-        // Port: CLI > env var > default (0 in debug mode) > error
+        // Port: CLI > env var > default 4096
         let port_env = std::env::var("OPENCODE_VOICE_PORT")
             .ok()
             .and_then(|s| s.parse::<u16>().ok());
-        let port = cli
-            .port
-            .or(port_env)
-            .or(if cli.debug { Some(0) } else { None })
-            .context("OpenCode server port is required. Use --port or set OPENCODE_VOICE_PORT")?;
+        let port = cli.port.or(port_env).unwrap_or(4096);
 
         // Model: CLI > env var > default
         let model_env = std::env::var("OPENCODE_VOICE_MODEL")
@@ -197,13 +185,6 @@ impl AppConfig {
         let server_password = std::env::var("OPENCODE_SERVER_PASSWORD").ok();
 
         // Boolean flags: explicit overrides, then defaults
-        let auto_submit = if cli.no_auto_submit {
-            false
-        } else if cli.auto_submit {
-            true
-        } else {
-            true
-        };
         let push_to_talk = if cli.no_push_to_talk {
             false
         } else if cli.push_to_talk {
@@ -225,7 +206,7 @@ impl AppConfig {
             opencode_port: port,
             toggle_key: cli.key.unwrap_or(' '),
             model_size,
-            auto_submit,
+            auto_submit: true,
             server_password,
             data_dir,
             audio_device,
@@ -496,5 +477,28 @@ mod tests {
         };
 
         assert_eq!(config.opencode_port, 8080);
+    }
+
+    #[test]
+    fn test_default_port_is_4096_when_no_env() {
+        // Temporarily ensure the env var is not set
+        let prev = std::env::var("OPENCODE_VOICE_PORT").ok();
+        unsafe {
+            std::env::remove_var("OPENCODE_VOICE_PORT");
+        }
+
+        let port_env: Option<u16> = std::env::var("OPENCODE_VOICE_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok());
+        let port: u16 = None::<u16>.or(port_env).unwrap_or(4096);
+
+        // Restore
+        if let Some(v) = prev {
+            unsafe {
+                std::env::set_var("OPENCODE_VOICE_PORT", v);
+            }
+        }
+
+        assert_eq!(port, 4096, "default port should be 4096 when no CLI or env");
     }
 }
