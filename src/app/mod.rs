@@ -653,6 +653,7 @@ impl VoiceApp {
             approval_count: Some(approval_count),
             transcript: self.last_transcript.as_deref(),
             duration,
+            active_session: self.active_session.clone(),
             spinner_frame: self.spinner_frame,
         };
 

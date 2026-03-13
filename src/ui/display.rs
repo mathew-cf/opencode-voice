@@ -26,6 +26,8 @@ pub struct DisplayMeta<'a> {
     pub global_hotkey_name: Option<&'a str>,
     pub approval: Option<&'a PendingApproval>,
     pub approval_count: Option<usize>,
+    /// Active session ID (shows last 8 chars in display).
+    pub active_session: Option<String>,
     /// Monotonically increasing frame counter for spinner animation.
     pub spinner_frame: usize,
 }
@@ -148,15 +150,39 @@ impl Display {
                 if let Some(transcript) = meta.transcript {
                     let preview: String = transcript.chars().take(60).collect();
                     let ellipsis = if transcript.len() > 60 { "..." } else { "" };
+                    let session_short = meta
+                        .active_session
+                        .as_deref()
+                        .map(|id| {
+                            if id.len() > 8 {
+                                id[id.len() - 8..].to_string()
+                            } else {
+                                id.to_string()
+                            }
+                        })
+                        .unwrap_or_else(|| "none".to_string());
                     vec![
-                        format!("\x1b[32m● Ready{}\x1b[0m", key_hint),
+                        format!(
+                            "\x1b[32m● Ready{}\x1b[0m  Session: {}",
+                            key_hint, session_short
+                        ),
                         format!("  Sent: {}{}", preview, ellipsis),
                     ]
                 } else {
-                    vec![format!(
-                        "\x1b[32m● Ready{} — Press to speak\x1b[0m",
-                        key_hint
-                    )]
+                    vec![
+                        format!("\x1b[32m● Ready{} — Press to speak\x1b[0m", key_hint),
+                        format!(
+                            "  Session: {}",
+                            meta.active_session
+                                .as_deref()
+                                .map(|id| if id.len() > 8 {
+                                    &id[id.len() - 8..]
+                                } else {
+                                    id
+                                })
+                                .unwrap_or("none")
+                        ),
+                    ]
                 }
             }
             RecordingState::Recording => {
@@ -335,10 +361,47 @@ mod tests {
             ..Default::default()
         };
         let lines = display.render_state(RecordingState::Idle, &meta);
-        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("Ready"));
         assert!(lines[0].contains("[space]"));
         assert!(lines[0].contains("Press to speak"));
+        assert!(lines[1].contains("Session: none")); // no active_session set
+    }
+
+    #[test]
+    fn test_render_state_idle_shows_session_id() {
+        let display = Display::new();
+        let meta = DisplayMeta {
+            active_session: Some("abcdef0123456789".to_string()),
+            toggle_key: Some("space"),
+            ..Default::default()
+        };
+        let lines = display.render_state(RecordingState::Idle, &meta);
+        // Session line should show last 8 chars
+        assert!(lines.iter().any(|l| l.contains("23456789")));
+        assert!(!lines.iter().any(|l| l.contains("abcdef")));
+    }
+
+    #[test]
+    fn test_render_state_idle_shows_none_when_no_session() {
+        let display = Display::new();
+        let meta = DisplayMeta {
+            toggle_key: Some("space"),
+            ..Default::default() // active_session: None by default
+        };
+        let lines = display.render_state(RecordingState::Idle, &meta);
+        assert!(lines.iter().any(|l| l.contains("none")));
+    }
+
+    #[test]
+    fn test_render_state_idle_shows_short_session_id_in_full() {
+        let display = Display::new();
+        let meta = DisplayMeta {
+            active_session: Some("short".to_string()), // less than 8 chars
+            ..Default::default()
+        };
+        let lines = display.render_state(RecordingState::Idle, &meta);
+        assert!(lines.iter().any(|l| l.contains("short")));
     }
 
     #[test]
