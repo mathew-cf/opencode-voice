@@ -96,6 +96,9 @@ pub struct VoiceApp {
 
     /// Counter for throttling debug audio level output.
     debug_audio_counter: usize,
+
+    /// The currently active session ID (used for sending messages).
+    pub(crate) active_session: Option<String>,
 }
 
 impl VoiceApp {
@@ -162,6 +165,7 @@ impl VoiceApp {
             spinner_frame: 0,
             suppress_next_toggle: false,
             debug_audio_counter: 0,
+            active_session: None,
         })
     }
 
@@ -183,6 +187,32 @@ impl VoiceApp {
                  Make sure OpenCode is running with --port {}.",
                 self.config.opencode_port, self.config.opencode_port
             );
+        }
+
+        // Initialize active session: use most recent existing session, or create one.
+        if !self.config.debug {
+            match self.bridge.list_sessions().await {
+                Ok(sessions) if !sessions.is_empty() => {
+                    let id = sessions[0].id.clone();
+                    eprintln!("[voice] Active session: {}", id);
+                    self.active_session = Some(id);
+                }
+                Ok(_) => {
+                    // No sessions exist — create one.
+                    match self.bridge.create_session().await {
+                        Ok(session) => {
+                            eprintln!("[voice] Created session: {}", session.id);
+                            self.active_session = Some(session.id);
+                        }
+                        Err(e) => {
+                            eprintln!("[voice] Warning: Could not create session: {}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[voice] Warning: Could not list sessions: {}", e);
+                }
+            }
         }
 
         // Set up global hotkey before the welcome banner so the banner
@@ -266,7 +296,7 @@ impl VoiceApp {
         }
 
         // Spawn SSE event bridge for permission/question handling.
-        if self.config.handle_prompts && !self.config.debug {
+        if !self.config.debug {
             let (sse_tx, mut sse_rx) =
                 tokio::sync::mpsc::unbounded_channel::<SseEvent>();
 
@@ -313,6 +343,15 @@ impl VoiceApp {
                         },
                         SseEvent::SessionStatus { session_id, busy } => {
                             AppEvent::SessionStatus { session_id, busy }
+                        }
+                        SseEvent::SessionUpdated { session_id } => {
+                            AppEvent::SessionUpdated { session_id }
+                        }
+                        SseEvent::SessionCreated { session_id } => {
+                            AppEvent::SessionCreated { session_id }
+                        }
+                        SseEvent::SessionDeleted { session_id } => {
+                            AppEvent::SessionDeleted { session_id }
                         }
                     };
                     if event_tx_fwd.send(app_event).is_err() {
@@ -441,7 +480,24 @@ impl VoiceApp {
                 }
 
                 AppEvent::SessionStatus { session_id, busy } => {
+                    if busy {
+                        self.active_session = Some(session_id.clone());
+                    }
                     approval::handle_sse_session_status(self, &session_id, busy);
+                }
+
+                AppEvent::SessionUpdated { session_id } => {
+                    self.active_session = Some(session_id);
+                }
+
+                AppEvent::SessionCreated { session_id } => {
+                    self.active_session = Some(session_id);
+                }
+
+                AppEvent::SessionDeleted { session_id } => {
+                    if self.active_session.as_deref() == Some(&session_id) {
+                        self.active_session = None;
+                    }
                 }
 
                 AppEvent::AudioChunk { rms_energy } => {
@@ -717,5 +773,59 @@ mod tests {
         // Sending an event should succeed while the receiver is alive.
         let result = app.event_tx.send(AppEvent::Shutdown);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_voice_app_new_active_session_none() {
+        let config = test_config();
+        let app = VoiceApp::new(config).expect("VoiceApp::new should succeed");
+        assert!(app.active_session.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_updated_sets_active_session() {
+        let config = test_config();
+        let mut app = VoiceApp::new(config).expect("VoiceApp::new should succeed");
+
+        // Simulate receiving SessionUpdated event
+        let session_id = "sess_abc123".to_string();
+        app.active_session = Some(session_id.clone());
+
+        assert_eq!(app.active_session, Some(session_id));
+    }
+
+    #[tokio::test]
+    async fn test_session_deleted_clears_active_session() {
+        let config = test_config();
+        let mut app = VoiceApp::new(config).expect("VoiceApp::new should succeed");
+
+        // Set an active session
+        app.active_session = Some("sess_to_delete".to_string());
+
+        // Simulate SessionDeleted for the active session
+        let session_id = "sess_to_delete".to_string();
+        if app.active_session.as_deref() == Some(&session_id) {
+            app.active_session = None;
+        }
+
+        assert!(app.active_session.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_deleted_other_session_no_change() {
+        let config = test_config();
+        let mut app = VoiceApp::new(config).expect("VoiceApp::new should succeed");
+
+        // Set an active session
+        app.active_session = Some("sess_active".to_string());
+
+        // Simulate SessionDeleted for a DIFFERENT session
+        let other_session_id = "sess_other".to_string();
+        if app.active_session.as_deref() == Some(&other_session_id) {
+            app.active_session = None;
+        }
+
+        // Active session should be unchanged
+        assert_eq!(app.active_session, Some("sess_active".to_string()));
     }
 }
