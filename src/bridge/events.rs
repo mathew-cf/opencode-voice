@@ -39,6 +39,12 @@ pub enum SseEvent {
         /// `false` when idle.
         busy: bool,
     },
+    /// Session was updated (renamed, etc.).
+    SessionUpdated { session_id: String },
+    /// A new session was created.
+    SessionCreated { session_id: String },
+    /// A session was deleted.
+    SessionDeleted { session_id: String },
     Connected,
     Disconnected(Option<String>),
 }
@@ -275,7 +281,7 @@ pub fn parse_sse_block(block: &str) -> Option<SseEvent> {
             })
         }
         // Events we intentionally ignore (high-frequency or informational).
-        "session.updated" | "session.created" | "session.deleted" | "session.diff"
+        "session.diff"
         | "session.error" | "session.idle" | "session.compacted"
         | "message.updated" | "message.removed" | "message.part.updated"
         | "message.part.delta" | "message.part.removed"
@@ -285,6 +291,36 @@ pub fn parse_sse_block(block: &str) -> Option<SseEvent> {
         | "pty.created" | "pty.updated" | "pty.exited" | "pty.deleted"
         | "permission.updated"
         | "installation.updated" | "installation.update-available" => None,
+        "session.updated" => {
+            let session_id = props
+                .get("info")
+                .and_then(|v| v.get("id"))
+                .or_else(|| props.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(SseEvent::SessionUpdated { session_id })
+        }
+        "session.created" => {
+            let session_id = props
+                .get("info")
+                .and_then(|v| v.get("id"))
+                .or_else(|| props.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(SseEvent::SessionCreated { session_id })
+        }
+        "session.deleted" => {
+            let session_id = props
+                .get("info")
+                .and_then(|v| v.get("id"))
+                .or_else(|| props.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(SseEvent::SessionDeleted { session_id })
+        }
         "session.status" => {
             let session_id = props
                 .get("sessionID")
@@ -466,14 +502,54 @@ mod tests {
         );
     }
 
+    // ── session lifecycle events ──────────────────────────────────────
+
+    #[test]
+    fn test_parse_session_updated() {
+        let json = r#"data: {"type":"session.updated","properties":{"info":{"id":"sess_1"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionUpdated { ref session_id } if session_id == "sess_1"),
+            "SessionUpdated session_id should be 'sess_1'"
+        );
+    }
+
+    #[test]
+    fn test_parse_session_created() {
+        let json = r#"data: {"type":"session.created","properties":{"info":{"id":"sess_2"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionCreated { ref session_id } if session_id == "sess_2"),
+            "SessionCreated session_id should be 'sess_2'"
+        );
+    }
+
+    #[test]
+    fn test_parse_session_deleted() {
+        let json = r#"data: {"type":"session.deleted","properties":{"info":{"id":"sess_3"}}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionDeleted { ref session_id } if session_id == "sess_3"),
+            "SessionDeleted session_id should be 'sess_3'"
+        );
+    }
+
+    #[test]
+    fn test_parse_session_updated_direct_id() {
+        // Some server versions may send id directly in properties rather than info.id
+        let json = r#"data: {"type":"session.updated","properties":{"id":"sess_direct"}}"#;
+        let event = parse_sse_block(json).unwrap();
+        assert!(
+            matches!(event, SseEvent::SessionUpdated { ref session_id } if session_id == "sess_direct"),
+            "SessionUpdated should fall back to direct id field"
+        );
+    }
+
     // ── explicitly ignored events ─────────────────────────────────────
 
     #[test]
     fn test_parse_ignored_session_events_return_none() {
         for event_type in &[
-            "session.updated",
-            "session.created",
-            "session.deleted",
             "session.diff",
             "session.error",
             "session.idle",

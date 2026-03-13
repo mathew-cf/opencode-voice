@@ -50,6 +50,18 @@ pub enum AppEvent {
         session_id: String,
         busy: bool,
     },
+    /// Active session was updated by the server.
+    SessionUpdated {
+        session_id: String,
+    },
+    /// A new session was created on the server.
+    SessionCreated {
+        session_id: String,
+    },
+    /// A session was deleted on the server.
+    SessionDeleted {
+        session_id: String,
+    },
     AudioChunk {
         rms_energy: f32,
     },

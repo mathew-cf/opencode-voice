@@ -178,6 +178,47 @@ fn test_multiline_sse_block_finds_data_line() {
     assert!(matches!(event, SseEvent::Connected));
 }
 
+// ─── Session lifecycle event tests ───────────────────────────────────────────
+
+/// `session.updated` event must parse into `SseEvent::SessionUpdated` with the
+/// correct `session_id` extracted from `properties.info.id`.
+#[test]
+fn test_session_updated_parses_correctly() {
+    let block = r#"data: {"type":"session.updated","properties":{"info":{"id":"sess_upd"}}}"#;
+    let event = parse_sse_block(block).expect("session.updated should produce an event");
+    assert!(
+        matches!(event, SseEvent::SessionUpdated { ref session_id } if session_id == "sess_upd"),
+        "Expected SessionUpdated with session_id \"sess_upd\", got {:?}",
+        event
+    );
+}
+
+/// `session.created` event must parse into `SseEvent::SessionCreated` with the
+/// correct `session_id` extracted from `properties.info.id`.
+#[test]
+fn test_session_created_parses_correctly() {
+    let block = r#"data: {"type":"session.created","properties":{"info":{"id":"sess_new"}}}"#;
+    let event = parse_sse_block(block).expect("session.created should produce an event");
+    assert!(
+        matches!(event, SseEvent::SessionCreated { ref session_id } if session_id == "sess_new"),
+        "Expected SessionCreated with session_id \"sess_new\", got {:?}",
+        event
+    );
+}
+
+/// `session.deleted` event must parse into `SseEvent::SessionDeleted` with the
+/// correct `session_id` extracted from `properties.info.id`.
+#[test]
+fn test_session_deleted_parses_correctly() {
+    let block = r#"data: {"type":"session.deleted","properties":{"info":{"id":"sess_del"}}}"#;
+    let event = parse_sse_block(block).expect("session.deleted should produce an event");
+    assert!(
+        matches!(event, SseEvent::SessionDeleted { ref session_id } if session_id == "sess_del"),
+        "Expected SessionDeleted with session_id \"sess_del\", got {:?}",
+        event
+    );
+}
+
 // ─── Backoff calculation tests ────────────────────────────────────────────────
 
 /// Verify the reconnect delay doubles each step and caps at 30 seconds.

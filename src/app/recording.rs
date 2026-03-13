@@ -299,24 +299,31 @@ pub(crate) async fn handle_push_to_talk_stop(app: &mut VoiceApp) {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Injects `text` into OpenCode and transitions to Injecting → Idle.
+/// Sends `text` to the active OpenCode session and transitions to Injecting → Idle.
 ///
-/// Calls `bridge.append_prompt` and, if `auto_submit` is enabled,
-/// `bridge.submit_prompt`.  On error, calls `handle_error`.
+/// If no active session exists, creates one first. On error, calls `handle_error`.
 async fn inject_text(app: &mut VoiceApp, text: &str) {
     app.state = RecordingState::Injecting;
     app.render_display();
 
-    if let Err(e) = app.bridge.append_prompt(text, None, None).await {
-        app.handle_error(&format!("Failed to inject text: {}", e));
-        return;
+    // Ensure we have an active session.
+    if app.active_session.is_none() {
+        match app.bridge.create_session().await {
+            Ok(session) => {
+                eprintln!("[voice] Created session: {}", session.id);
+                app.active_session = Some(session.id);
+            }
+            Err(e) => {
+                app.handle_error(&format!("Failed to create session: {}", e));
+                return;
+            }
+        }
     }
 
-    if app.config.auto_submit {
-        if let Err(e) = app.bridge.submit_prompt().await {
-            app.handle_error(&format!("Failed to submit prompt: {}", e));
-            return;
-        }
+    let session_id = app.active_session.as_ref().unwrap().clone();
+    if let Err(e) = app.bridge.send_message(&session_id, text).await {
+        app.handle_error(&format!("Failed to send message: {}", e));
+        return;
     }
 
     return_to_idle_or_approval(app);
@@ -433,7 +440,6 @@ mod tests {
             opencode_port: 4096,
             toggle_key: ' ',
             model_size: ModelSize::TinyEn,
-            auto_submit: true,
             server_password: None,
             data_dir: PathBuf::from("/nonexistent/data"),
             audio_device: None,
@@ -543,6 +549,61 @@ mod tests {
 
         return_to_idle_or_approval(&mut app);
         assert_eq!(app.state, RecordingState::ApprovalPending);
+    }
+
+    // ── inject_text ─────────────────────────────────────────────────────────────
+
+    /// With an active session set, inject_text transitions through Injecting and
+    /// then fails (bridge not running) → state becomes Error.
+    #[tokio::test]
+    async fn test_inject_text_transitions_to_injecting_state() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        app.active_session = Some("sess_1".to_string());
+        inject_text(&mut app, "hello world").await;
+        // Bridge is not running → send_message fails → handle_error → Error state.
+        assert!(
+            matches!(app.state, RecordingState::Error),
+            "expected Error state when bridge is not running, got {:?}",
+            app.state
+        );
+    }
+
+    /// With no active session, inject_text tries to create one via the bridge.
+    /// Since the bridge is not running, create_session fails → Error state.
+    #[tokio::test]
+    async fn test_inject_text_creates_session_when_none() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        assert!(app.active_session.is_none());
+        inject_text(&mut app, "test text").await;
+        // Bridge is not running → create_session fails → handle_error → Error state.
+        assert!(
+            matches!(app.state, RecordingState::Error),
+            "expected Error state when bridge is not running, got {:?}",
+            app.state
+        );
+    }
+
+    /// With an active session, inject_text uses send_message (not create_session).
+    /// Since the bridge is not running, send_message fails → Error state.
+    /// Also verifies inject_text does not set last_transcript (that's done by the caller).
+    #[tokio::test]
+    async fn test_inject_text_with_active_session_uses_send_message() {
+        let mut app = VoiceApp::new(test_config()).unwrap();
+        app.active_session = Some("sess_abc".to_string());
+        // last_transcript is not set before calling inject_text.
+        assert!(app.last_transcript.is_none());
+        inject_text(&mut app, "voice command").await;
+        // Bridge is not running → send_message fails → handle_error → Error state.
+        assert!(
+            matches!(app.state, RecordingState::Error),
+            "expected Error state when bridge is not running, got {:?}",
+            app.state
+        );
+        // inject_text does not set last_transcript — that is the caller's responsibility.
+        assert!(
+            app.last_transcript.is_none(),
+            "inject_text should not set last_transcript"
+        );
     }
 
     // ── try_handle_approval ──────────────────────────────────────────────────

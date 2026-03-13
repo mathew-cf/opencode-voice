@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Client;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::time::Duration;
 
@@ -13,6 +14,13 @@ pub struct OpenCodeBridge {
     client: Client,
     base_url: String,
     password: Option<String>,
+}
+
+/// Information about an OpenCode session.
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct SessionInfo {
+    pub id: String,
+    pub title: String,
 }
 
 impl OpenCodeBridge {
@@ -36,9 +44,59 @@ impl OpenCodeBridge {
     /// Builds the Authorization header value for Basic auth.
     fn auth_header(&self) -> Option<String> {
         self.password.as_ref().map(|pw| {
-            let credentials = format!(":{}", pw);
+            let credentials = format!("opencode:{}", pw);
             format!("Basic {}", STANDARD.encode(credentials))
         })
+    }
+
+    /// Performs a GET request and deserializes the JSON response.
+    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.client.get(&url);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req
+            .send()
+            .await
+            .with_context(|| friendly_connection_error(&self.base_url))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode API error {}: {}", status, body);
+        }
+        let result = resp
+            .json::<T>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {}", path))?;
+        Ok(result)
+    }
+
+    /// Performs a POST request with JSON body and deserializes the JSON response.
+    async fn post_json_response<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(auth) = self.auth_header() {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req
+            .send()
+            .await
+            .with_context(|| friendly_connection_error(&self.base_url))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OpenCode API error {}: {}", status, body);
+        }
+        let result = resp
+            .json::<T>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {}", path))?;
+        Ok(result)
     }
 
     /// Performs a POST request with JSON body.
@@ -60,26 +118,35 @@ impl OpenCodeBridge {
         Ok(())
     }
 
-    /// Injects text into OpenCode's prompt.
-    pub async fn append_prompt(
-        &self,
-        text: &str,
-        directory: Option<&str>,
-        workspace: Option<&str>,
-    ) -> Result<()> {
-        let mut url = format!("{}/tui/append-prompt", self.base_url);
-        let mut params = Vec::new();
-        if let Some(dir) = directory {
-            params.push(format!("directory={}", urlencoding_encode(dir)));
+    /// Checks if OpenCode is healthy. Returns Ok(true) if healthy, Ok(false) otherwise.
+    pub async fn health_check(&self) -> Result<bool> {
+        let result: Result<serde_json::Value> = self.get_json("/global/health").await;
+        match result {
+            Ok(value) => Ok(value.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false)),
+            Err(_) => Ok(false),
         }
-        if let Some(ws) = workspace {
-            params.push(format!("workspace={}", urlencoding_encode(ws)));
-        }
-        if !params.is_empty() {
-            url.push('?');
-            url.push_str(&params.join("&"));
-        }
-        let mut req = self.client.post(&url).json(&json!({"text": text}));
+    }
+
+    /// Lists recent sessions.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
+        self.get_json::<Vec<SessionInfo>>("/session?limit=10&roots=true")
+            .await
+    }
+
+    /// Creates a new session.
+    pub async fn create_session(&self) -> Result<SessionInfo> {
+        self.post_json_response::<SessionInfo>("/session", json!({}))
+            .await
+    }
+
+    /// Sends a text message to a session asynchronously.
+    pub async fn send_message(&self, session_id: &str, text: &str) -> Result<()> {
+        let path = format!("/session/{}/prompt_async", session_id);
+        let body = json!({
+            "parts": [{ "type": "text", "text": text }]
+        });
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = self.client.post(&url).json(&body);
         if let Some(auth) = self.auth_header() {
             req = req.header("Authorization", auth);
         }
@@ -89,19 +156,14 @@ impl OpenCodeBridge {
             .with_context(|| friendly_connection_error(&self.base_url))?;
         if !resp.status().is_success() {
             let status = resp.status();
-            anyhow::bail!("append_prompt failed: {}", status);
+            anyhow::bail!("send_message failed: {}", status);
         }
         Ok(())
     }
 
-    /// Submits the OpenCode prompt.
-    pub async fn submit_prompt(&self) -> Result<()> {
-        self.post_json("/tui/submit-prompt", json!({})).await
-    }
-
     /// Checks if OpenCode is reachable. Never panics.
     pub async fn is_connected(&self) -> bool {
-        let url = format!("{}/", self.base_url);
+        let url = format!("{}/global/health", self.base_url);
         let client = Client::builder()
             .timeout(Duration::from_secs(2))
             .build()
@@ -110,7 +172,7 @@ impl OpenCodeBridge {
         if let Some(auth) = self.auth_header() {
             req = req.header("Authorization", auth);
         }
-        req.send().await.is_ok()
+        req.send().await.map(|r| r.status().is_success()).unwrap_or(false)
     }
 
     /// Replies to a permission request.
@@ -143,19 +205,7 @@ impl OpenCodeBridge {
 
 fn friendly_connection_error(base_url: &str) -> String {
     format!(
-        "Cannot connect to OpenCode at {}. Make sure OpenCode is running with --port flag: opencode --port <port>",
+        "Cannot connect to OpenCode at {}. Make sure OpenCode is running with 'opencode web' or 'opencode --port <port>'",
         base_url
     )
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    s.chars()
-        .flat_map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
-                vec![c]
-            } else {
-                format!("%{:02X}", c as u32).chars().collect::<Vec<_>>()
-            }
-        })
-        .collect()
 }
